@@ -1,5 +1,5 @@
 {
-  "name": "@regisseur/store",
+  "name": "@regisseur/store-postgres",
   "version": "0.1.0",
   "private": true,
   "type": "module",

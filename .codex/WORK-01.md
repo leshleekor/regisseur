@@ -62,8 +62,8 @@ packages/
   core/
   scheduler/
   dispatcher/
-  queue/
-  store/
+  queue-bullmq/
+  store-postgres/
   adapter-http/
   adapter-cli/
   adapter-openclaw/
