@@ -1,0 +1,25 @@
+{
+  "name": "regisseur",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight AI agent orchestrator",
+  "packageManager": "pnpm@10.23.0",
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --check package.json pnpm-workspace.yaml tsconfig.base.json .prettierrc eslint.config.mjs vitest.config.ts README.md \"packages/**/*.{json,ts}\" \"apps/**/*.{json,ts}\"",
+    "format:write": "prettier --write package.json pnpm-workspace.yaml tsconfig.base.json .prettierrc eslint.config.mjs vitest.config.ts README.md \"packages/**/*.{json,ts}\" \"apps/**/*.{json,ts}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.26.1",
+    "vitest": "^3.0.8"
+  }
+}
