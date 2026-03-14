@@ -657,6 +657,28 @@ describe.sequential("store-postgres integration", () => {
       expect(await schedulesRepository.findById("schedule-1")).toEqual(updated);
     });
 
+    it("finds all schedules in created_at ascending order", async () => {
+      await schedulesRepository.insert(
+        createSchedule("schedule-1", {
+          createdAt: "2026-03-15T00:00:02.000Z",
+          updatedAt: "2026-03-15T00:00:02.000Z",
+        }),
+      );
+      await schedulesRepository.insert(
+        createSchedule("schedule-2", {
+          createdAt: "2026-03-15T00:00:01.000Z",
+          updatedAt: "2026-03-15T00:00:01.000Z",
+        }),
+      );
+      await schedulesRepository.insert(createSchedule("schedule-3"));
+
+      expect(
+        (await schedulesRepository.findAll()).map(
+          (schedule) => schedule.scheduleId,
+        ),
+      ).toEqual(["schedule-3", "schedule-2", "schedule-1"]);
+    });
+
     it("finds enabled schedules in created_at ascending order", async () => {
       await schedulesRepository.insert(
         createSchedule("schedule-1", {

@@ -131,6 +131,17 @@ export class PostgresSchedulesRepository {
     return result.rows[0] ? mapScheduleRowToDomain(result.rows[0]) : null;
   }
 
+  async findAll(): Promise<Schedule[]> {
+    const result = await this.db.query<ScheduleRow>(
+      `
+        SELECT * FROM schedules
+        ORDER BY created_at ASC
+      `,
+    );
+
+    return result.rows.map(mapScheduleRowToDomain);
+  }
+
   async findEnabled(): Promise<Schedule[]> {
     const result = await this.db.query<ScheduleRow>(
       `
