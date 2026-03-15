@@ -1,3 +1,4 @@
+import type { FastifyInstance } from "fastify";
 import type {
   AgentDefinition,
   Run,
@@ -5,14 +6,23 @@ import type {
   Schedule,
   ScheduleTargetType,
   Task,
+  TaskEdge,
   TaskStatus,
   Workflow,
   WorkflowStatus,
 } from "@regisseur/core";
 import type {
+  DispatchEnqueuePort,
   DispatchRequestOptions,
   DispatchTaskResult,
 } from "@regisseur/dispatcher";
+import type {
+  BullMqConnectionConfig,
+  QueueLike,
+  TaskDispatchJobPayload,
+  WorkerLike,
+} from "@regisseur/queue-bullmq";
+import type { Queryable } from "@regisseur/store-postgres";
 
 export interface AgentsRepositoryLike {
   upsert(agent: AgentDefinition): Promise<void>;
@@ -36,6 +46,15 @@ export interface TasksRepositoryLike {
   findByStatus(status: TaskStatus): Promise<Task[]>;
   findById(taskId: string): Promise<Task | null>;
   deleteById(taskId: string): Promise<void>;
+}
+
+export interface TaskEdgesRepositoryLike {
+  insert(edge: TaskEdge): Promise<void>;
+  insertMany(edges: readonly TaskEdge[]): Promise<void>;
+  findAllByWorkflowTasks(taskIds: readonly string[]): Promise<TaskEdge[]>;
+  findByFromTaskId(taskId: string): Promise<TaskEdge[]>;
+  findByToTaskId(taskId: string): Promise<TaskEdge[]>;
+  deleteByTaskId(taskId: string): Promise<void>;
 }
 
 export interface SchedulesRepositoryLike {
@@ -71,16 +90,106 @@ export interface ServerRepositories {
   agentsRepository: AgentsRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
   tasksRepository: TasksRepositoryLike;
+  taskEdgesRepository: TaskEdgesRepositoryLike;
   schedulesRepository: SchedulesRepositoryLike;
   runsRepository: RunsRepositoryLike;
 }
 
 export interface ServerDependencies extends ServerRepositories {
   dispatcher: DispatcherLike;
+  enqueuePort: DispatchEnqueuePort;
   logger?: boolean | Record<string, unknown>;
 }
 
 export interface ServerConfig {
   host: string;
   port: number;
+}
+
+export interface BootstrapConfig {
+  server: ServerConfig;
+  databaseUrl: string;
+  redisUrl: string;
+  autoMigrate: boolean;
+  logLevel: string;
+  enableHttpAdapter: boolean;
+  enableCliAdapter: boolean;
+  enableOpenClawAdapter: boolean;
+}
+
+export interface BootstrapConfigOverrides extends Partial<
+  Omit<BootstrapConfig, "server">
+> {
+  server?: Partial<ServerConfig>;
+}
+
+export interface PostgresPoolLike extends Queryable {
+  end(): Promise<void>;
+}
+
+export interface TaskDispatchQueueLike extends QueueLike<TaskDispatchJobPayload> {
+  close(): Promise<void>;
+}
+
+export interface QueueResources {
+  connection: BullMqConnectionConfig;
+  taskDispatchQueue: TaskDispatchQueueLike;
+  close(): Promise<void>;
+}
+
+export interface WorkerResources {
+  taskDispatchWorker: WorkerLike;
+  close(): Promise<void>;
+}
+
+export type ExecutionResult =
+  | {
+      ok: true;
+      externalRunId?: string;
+      output?: Record<string, unknown>;
+    }
+  | {
+      ok: false;
+      message: string;
+      reason?: string;
+    };
+
+export interface ExecutionAdapter {
+  runtimeType: AgentDefinition["runtimeType"];
+  execute(task: Task, agent: AgentDefinition): Promise<ExecutionResult>;
+}
+
+export interface ExecutableAdapterRegistry {
+  http?: ExecutionAdapter;
+  cli?: ExecutionAdapter;
+  openclaw?: ExecutionAdapter;
+}
+
+export interface StandaloneServerComposition {
+  config: BootstrapConfig;
+  dependencies: ServerDependencies;
+  repositories: ServerRepositories;
+  dispatcher: DispatcherLike;
+  enqueuePort: DispatchEnqueuePort;
+  executableAdapterRegistry: ExecutableAdapterRegistry;
+  pool: PostgresPoolLike;
+  queueResources: QueueResources;
+  workerResources?: WorkerResources;
+}
+
+export interface ShutdownResources {
+  app: FastifyInstance;
+  pool: PostgresPoolLike;
+  queueResources: QueueResources;
+  workerResources?: WorkerResources;
+}
+
+export interface ShutdownController {
+  shutdown(): Promise<void>;
+}
+
+export interface BootstrapServerResult extends StandaloneServerComposition {
+  app: FastifyInstance;
+  shutdown: ShutdownController;
+  unregisterSignalHandlers: () => void;
 }

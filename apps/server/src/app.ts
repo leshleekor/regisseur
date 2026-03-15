@@ -25,6 +25,7 @@ function assertServerDependencies(
   assertDependency(deps.agentsRepository, "agentsRepository");
   assertDependency(deps.workflowsRepository, "workflowsRepository");
   assertDependency(deps.tasksRepository, "tasksRepository");
+  assertDependency(deps.taskEdgesRepository, "taskEdgesRepository");
   assertDependency(deps.schedulesRepository, "schedulesRepository");
   assertDependency(deps.runsRepository, "runsRepository");
   assertDependency(deps.dispatcher, "dispatcher");

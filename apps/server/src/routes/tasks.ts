@@ -68,6 +68,24 @@ export function registerTaskRoutes(
     });
 
     if (result.ok) {
+      // NOTE: agentId is not included in the queue payload
+      // (TaskDispatchJobPayload). task.assigneeAgentId is the only way for the
+      // execution worker to recover which agent was selected for this task.
+      //
+      // NOTE: At this point the job has already been enqueued. If the task
+      // state update below fails, the job will remain in the queue with no
+      // corresponding "queued" state in the database. This inconsistency is
+      // intentional at this stage and will be addressed when a transactional
+      // dispatch service is introduced in the execution lifecycle work.
+      // Duplicate enqueue on client retry is prevented by the temporary
+      // jobId = taskId policy at the enqueue port layer.
+      await deps.tasksRepository.upsert({
+        ...task,
+        assigneeAgentId: result.agentId,
+        status: "queued",
+        updatedAt: new Date().toISOString(),
+      });
+
       return result;
     }
 

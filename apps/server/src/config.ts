@@ -1,7 +1,7 @@
 import type { ServerConfig } from "./types.js";
 
-const DEFAULT_SERVER_CONFIG: ServerConfig = {
-  host: "127.0.0.1",
+export const DEFAULT_SERVER_CONFIG: ServerConfig = {
+  host: "0.0.0.0",
   port: 3000,
 };
 

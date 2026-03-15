@@ -5,6 +5,7 @@ import type {
   Run,
   Schedule,
   Task,
+  TaskEdge,
   Workflow,
 } from "@regisseur/core";
 import type { DispatchTaskResult } from "@regisseur/dispatcher";
@@ -18,6 +19,7 @@ import type {
   RunsRepositoryLike,
   SchedulesRepositoryLike,
   ServerDependencies,
+  TaskEdgesRepositoryLike,
   TasksRepositoryLike,
   WorkflowsRepositoryLike,
 } from "./types.js";
@@ -126,6 +128,7 @@ interface TestContext {
     agents: Map<string, AgentDefinition>;
     workflows: Map<string, Workflow>;
     tasks: Map<string, Task>;
+    taskEdges: TaskEdge[];
     schedules: Map<string, Schedule>;
     runs: Map<string, Run>;
   };
@@ -134,6 +137,7 @@ interface TestContext {
     agents: Record<string, ReturnType<typeof vi.fn>>;
     workflows: Record<string, ReturnType<typeof vi.fn>>;
     tasks: Record<string, ReturnType<typeof vi.fn>>;
+    taskEdges: Record<string, ReturnType<typeof vi.fn>>;
     schedules: Record<string, ReturnType<typeof vi.fn>>;
     runs: Record<string, ReturnType<typeof vi.fn>>;
     dispatcher: ReturnType<typeof vi.fn>;
@@ -145,6 +149,7 @@ function createTestContext(): TestContext {
     agents: new Map<string, AgentDefinition>(),
     workflows: new Map<string, Workflow>(),
     tasks: new Map<string, Task>(),
+    taskEdges: [],
     schedules: new Map<string, Schedule>(),
     runs: new Map<string, Run>(),
   };
@@ -222,6 +227,39 @@ function createTestContext(): TestContext {
   const schedulesUpsert = vi.fn(async (schedule: Schedule) => {
     callLog.push("schedules.upsert");
     state.schedules.set(schedule.scheduleId, schedule);
+  });
+  const taskEdgesInsert = vi.fn(async (edge: TaskEdge) => {
+    callLog.push("taskEdges.insert");
+    state.taskEdges.push(edge);
+  });
+  const taskEdgesInsertMany = vi.fn(async (edges: readonly TaskEdge[]) => {
+    callLog.push("taskEdges.insertMany");
+    state.taskEdges.push(...edges);
+  });
+  const taskEdgesFindAllByWorkflowTasks = vi.fn(
+    async (taskIds: readonly string[]) => {
+      callLog.push("taskEdges.findAllByWorkflowTasks");
+      const taskIdSet = new Set(taskIds);
+
+      return state.taskEdges.filter(
+        (edge) =>
+          taskIdSet.has(edge.fromTaskId) && taskIdSet.has(edge.toTaskId),
+      );
+    },
+  );
+  const taskEdgesFindByFromTaskId = vi.fn(async (taskId: string) => {
+    callLog.push("taskEdges.findByFromTaskId");
+    return state.taskEdges.filter((edge) => edge.fromTaskId === taskId);
+  });
+  const taskEdgesFindByToTaskId = vi.fn(async (taskId: string) => {
+    callLog.push("taskEdges.findByToTaskId");
+    return state.taskEdges.filter((edge) => edge.toTaskId === taskId);
+  });
+  const taskEdgesDeleteByTaskId = vi.fn(async (taskId: string) => {
+    callLog.push("taskEdges.deleteByTaskId");
+    state.taskEdges = state.taskEdges.filter(
+      (edge) => edge.fromTaskId !== taskId && edge.toTaskId !== taskId,
+    );
   });
   const schedulesFindAll = vi.fn(async () => {
     callLog.push("schedules.findAll");
@@ -334,6 +372,14 @@ function createTestContext(): TestContext {
     findById: schedulesFindById,
     deleteById: schedulesDeleteById,
   };
+  const taskEdgesRepository: TaskEdgesRepositoryLike = {
+    insert: taskEdgesInsert,
+    insertMany: taskEdgesInsertMany,
+    findAllByWorkflowTasks: taskEdgesFindAllByWorkflowTasks,
+    findByFromTaskId: taskEdgesFindByFromTaskId,
+    findByToTaskId: taskEdgesFindByToTaskId,
+    deleteByTaskId: taskEdgesDeleteByTaskId,
+  };
   const runsRepository: RunsRepositoryLike = {
     upsert: runsUpsert,
     findByTaskId: runsFindByTaskId,
@@ -352,6 +398,7 @@ function createTestContext(): TestContext {
         agentsRepository,
         workflowsRepository,
         tasksRepository,
+        taskEdgesRepository,
         schedulesRepository,
         runsRepository,
       },
@@ -381,6 +428,14 @@ function createTestContext(): TestContext {
         findByStatus: tasksFindByStatus,
         findById: tasksFindById,
         deleteById: tasksDeleteById,
+      },
+      taskEdges: {
+        insert: taskEdgesInsert,
+        insertMany: taskEdgesInsertMany,
+        findAllByWorkflowTasks: taskEdgesFindAllByWorkflowTasks,
+        findByFromTaskId: taskEdgesFindByFromTaskId,
+        findByToTaskId: taskEdgesFindByToTaskId,
+        deleteByTaskId: taskEdgesDeleteByTaskId,
       },
       schedules: {
         upsert: schedulesUpsert,
@@ -1045,6 +1100,14 @@ describe("server app", () => {
         },
       });
       expect(ctx.spies.dispatcher).toHaveBeenCalledTimes(1);
+      expect(ctx.spies.tasks.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: "task-1",
+          status: "queued",
+          assigneeAgentId: "agent-1",
+          updatedAt: expect.any(String),
+        }),
+      );
     });
 
     it("POST /tasks/:taskId/dispatch defaults triggerSource to manual", async () => {
@@ -1084,6 +1147,11 @@ describe("server app", () => {
         expect.any(Object),
         expect.any(Array),
         { triggerSource: "schedule" },
+      );
+      expect(ctx.spies.tasks.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "queued",
+        }),
       );
     });
 
@@ -1125,6 +1193,7 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("TASK_NOT_READY");
+      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch maps ASSIGNEE_NOT_FOUND to 409", async () => {
@@ -1149,6 +1218,7 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("ASSIGNEE_NOT_FOUND");
+      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch maps ASSIGNEE_DISABLED to 409", async () => {
@@ -1170,6 +1240,7 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(409);
+      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch maps NO_MATCHING_AGENT to 409", async () => {
@@ -1191,6 +1262,7 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(409);
+      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch maps ENQUEUE_FAILED to 502", async () => {
@@ -1215,6 +1287,27 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("ENQUEUE_FAILED");
+      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
+    });
+
+    it("POST /tasks/:taskId/dispatch returns 500 when queued state persistence fails", async () => {
+      const ctx = createTestContext();
+      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.agents.set("agent-1", createAgent("agent-1"));
+      ctx.deps.tasksRepository.upsert = vi.fn(async () => {
+        throw new Error("persist failed");
+      });
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/dispatch",
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(
+        responseJson<{ error: { code: string } }>(response).error.code,
+      ).toBe("INTERNAL_SERVER_ERROR");
     });
 
     it("POST /tasks/:taskId/dispatch validates triggerSource", async () => {
@@ -1250,6 +1343,7 @@ describe("server app", () => {
         "tasks.findById",
         "agents.findAll",
         "dispatcher.dispatch",
+        "tasks.upsert",
       ]);
     });
   });
@@ -1866,6 +1960,7 @@ describe("server app", () => {
         buildApp({
           workflowsRepository: {} as WorkflowsRepositoryLike,
           tasksRepository: {} as TasksRepositoryLike,
+          taskEdgesRepository: {} as TaskEdgesRepositoryLike,
           schedulesRepository: {} as SchedulesRepositoryLike,
           runsRepository: {} as RunsRepositoryLike,
           dispatcher: {} as DispatcherLike,
