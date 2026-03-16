@@ -80,6 +80,7 @@ export async function registerOneTimeSchedule(
   );
   const registration = await port.enqueueScheduleTrigger(triggerRequest, {
     delayMs,
+    jobId: schedule.scheduleId,
   });
 
   return {
@@ -124,6 +125,7 @@ export async function registerCronSchedule(
   );
   const registration = await port.registerCronScheduleTrigger(triggerRequest, {
     cronExpression: schedule.cronExpression,
+    jobId: schedule.scheduleId,
     timezone: schedule.timezone,
   });
 

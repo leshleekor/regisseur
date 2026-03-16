@@ -15,9 +15,13 @@
     "dist"
   ],
   "dependencies": {
+    "@regisseur/adapter-cli": "workspace:*",
+    "@regisseur/adapter-http": "workspace:*",
+    "@regisseur/adapter-openclaw": "workspace:*",
     "@regisseur/core": "workspace:*",
     "@regisseur/dispatcher": "workspace:*",
     "@regisseur/queue-bullmq": "workspace:*",
+    "@regisseur/scheduler": "workspace:*",
     "@regisseur/store-postgres": "workspace:*",
     "fastify": "^5.6.1"
   },

@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS workflows (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+  workflow_definition_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NULL,
+  enabled BOOLEAN NOT NULL,
+  metadata JSONB NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,
   workflow_id TEXT NOT NULL REFERENCES workflows(workflow_id),
@@ -39,6 +49,27 @@ CREATE TABLE IF NOT EXISTS task_edges (
   to_task_id TEXT NOT NULL REFERENCES tasks(task_id),
   type TEXT NOT NULL,
   PRIMARY KEY (from_task_id, to_task_id, type)
+);
+
+CREATE TABLE IF NOT EXISTS task_templates (
+  task_template_id TEXT PRIMARY KEY,
+  workflow_definition_id TEXT NOT NULL
+    REFERENCES workflow_definitions(workflow_definition_id),
+  title TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  default_assignee_agent_id TEXT NULL REFERENCES agents(agent_id),
+  retry_count INTEGER NOT NULL,
+  concurrency_key TEXT NULL,
+  metadata JSONB NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_template_edges (
+  from_task_template_id TEXT NOT NULL REFERENCES task_templates(task_template_id),
+  to_task_template_id TEXT NOT NULL REFERENCES task_templates(task_template_id),
+  type TEXT NOT NULL,
+  PRIMARY KEY (from_task_template_id, to_task_template_id, type)
 );
 
 CREATE TABLE IF NOT EXISTS schedules (
@@ -88,6 +119,21 @@ CREATE INDEX IF NOT EXISTS idx_task_edges_to_task_id
 
 CREATE INDEX IF NOT EXISTS idx_task_edges_from_task_id
   ON task_edges (from_task_id);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_enabled
+  ON workflow_definitions (enabled);
+
+CREATE INDEX IF NOT EXISTS idx_task_templates_workflow_definition_id
+  ON task_templates (workflow_definition_id);
+
+CREATE INDEX IF NOT EXISTS idx_task_templates_default_assignee_agent_id
+  ON task_templates (default_assignee_agent_id);
+
+CREATE INDEX IF NOT EXISTS idx_task_template_edges_from_task_template_id
+  ON task_template_edges (from_task_template_id);
+
+CREATE INDEX IF NOT EXISTS idx_task_template_edges_to_task_template_id
+  ON task_template_edges (to_task_template_id);
 
 CREATE INDEX IF NOT EXISTS idx_schedules_enabled
   ON schedules (enabled);

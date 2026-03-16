@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentRow, Queryable, TaskRow } from "@regisseur/store-postgres";
-import type { TaskDispatchJobPayload } from "@regisseur/queue-bullmq";
+import type {
+  AgentRow,
+  Queryable,
+  ScheduleRow,
+  TaskRow,
+  WorkflowRow,
+} from "@regisseur/store-postgres";
+import type {
+  ScheduleTriggerJobPayload,
+  TaskDispatchJobPayload,
+} from "@regisseur/queue-bullmq";
 
 import { bootstrapServer } from "./bootstrap.js";
 
@@ -32,7 +41,9 @@ function createPgError(
 
 function createInMemoryPool() {
   const agents = new Map<string, AgentRow>();
+  const schedules = new Map<string, ScheduleRow>();
   const tasks = new Map<string, TaskRow>();
+  const workflows = new Map<string, WorkflowRow>();
   let failNextQuery: (Error & { code?: string }) | null = null;
   const pool: Queryable & {
     end: ReturnType<typeof vi.fn>;
@@ -70,10 +81,57 @@ function createInMemoryPool() {
         return createQueryResult(Array.from(agents.values()));
       }
 
+      if (
+        sql.includes("INSERT INTO workflows") &&
+        sql.includes("ON CONFLICT")
+      ) {
+        const [workflowId, name, status, metadata, createdAt, updatedAt] =
+          values;
+
+        workflows.set(String(workflowId), {
+          workflow_id: String(workflowId),
+          name: String(name),
+          status: String(status),
+          metadata: metadata === null ? null : JSON.parse(String(metadata)),
+          created_at: String(createdAt),
+          updated_at: String(updatedAt),
+        });
+
+        return createQueryResult([]);
+      }
+
+      if (sql === "SELECT * FROM workflows WHERE workflow_id = $1") {
+        const workflow = workflows.get(String(values[0]));
+
+        return createQueryResult(workflow ? [workflow] : []);
+      }
+
+      if (
+        sql ===
+        "SELECT * FROM schedules WHERE enabled = TRUE ORDER BY created_at ASC"
+      ) {
+        return createQueryResult(
+          Array.from(schedules.values()).filter((schedule) => schedule.enabled),
+        );
+      }
+
       if (sql === "SELECT * FROM tasks WHERE task_id = $1") {
         const task = tasks.get(String(values[0]));
 
         return createQueryResult(task ? [task] : []);
+      }
+
+      if (
+        sql ===
+        "SELECT * FROM tasks WHERE workflow_id = $1 ORDER BY created_at ASC"
+      ) {
+        const workflowId = String(values[0]);
+
+        return createQueryResult(
+          Array.from(tasks.values()).filter(
+            (task) => task.workflow_id === workflowId,
+          ),
+        );
       }
 
       if (sql.includes("INSERT INTO tasks") && sql.includes("ON CONFLICT")) {
@@ -119,7 +177,9 @@ function createInMemoryPool() {
     pool,
     state: {
       agents,
+      schedules,
       tasks,
+      workflows,
       setFailNextQuery(error: Error & { code?: string }) {
         failNextQuery = error;
       },
@@ -129,6 +189,7 @@ function createInMemoryPool() {
 
 function createQueueResources() {
   const jobs: TaskDispatchJobPayload[] = [];
+  const scheduleJobs: ScheduleTriggerJobPayload[] = [];
   const addCalls: unknown[][] = [];
   const taskDispatchQueue = {
     add: vi.fn(
@@ -148,6 +209,24 @@ function createQueueResources() {
     ),
     close: vi.fn(async () => undefined),
   };
+  const scheduleTriggerQueue = {
+    add: vi.fn(
+      async (
+        _jobName: string,
+        payload: ScheduleTriggerJobPayload,
+        options?: unknown,
+      ) => {
+        addCalls.push([_jobName, payload, options]);
+        scheduleJobs.push(payload);
+
+        return {
+          id: `schedule-job-${scheduleJobs.length}`,
+          data: payload,
+        } as never;
+      },
+    ),
+    close: vi.fn(async () => undefined),
+  };
 
   return {
     queueResources: {
@@ -156,10 +235,24 @@ function createQueueResources() {
         port: 6379,
       },
       taskDispatchQueue,
+      scheduleTriggerQueue,
       close: vi.fn(async () => undefined),
     },
     jobs,
+    scheduleJobs,
     addCalls,
+  };
+}
+
+function createWorkerResources() {
+  return {
+    taskDispatchWorker: {
+      close: vi.fn(async () => undefined),
+    },
+    scheduleTriggerWorker: {
+      close: vi.fn(async () => undefined),
+    },
+    close: vi.fn(async () => undefined),
   };
 }
 
@@ -182,11 +275,13 @@ describe("standalone runtime composition", () => {
   it("serves /health through the real composition path", async () => {
     const { pool } = createInMemoryPool();
     const { queueResources } = createQueueResources();
+    const workerResources = createWorkerResources();
     const result = await bootstrapServer({
       env: createEnv(),
       factories: {
         createPool: () => pool,
         createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => workerResources),
         registerShutdownHandlers: () => vi.fn(),
       },
     });
@@ -207,11 +302,13 @@ describe("standalone runtime composition", () => {
   it("supports a minimal CRUD route with real composition and fake infra", async () => {
     const { pool } = createInMemoryPool();
     const { queueResources } = createQueueResources();
+    const workerResources = createWorkerResources();
     const result = await bootstrapServer({
       env: createEnv(),
       factories: {
         createPool: () => pool,
         createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => workerResources),
         registerShutdownHandlers: () => vi.fn(),
       },
     });
@@ -252,6 +349,7 @@ describe("standalone runtime composition", () => {
   it("wires dispatch through the real composition path and fake queue", async () => {
     const { pool, state } = createInMemoryPool();
     const { queueResources, jobs, addCalls } = createQueueResources();
+    const workerResources = createWorkerResources();
 
     state.agents.set("agent-1", {
       agent_id: "agent-1",
@@ -260,6 +358,14 @@ describe("standalone runtime composition", () => {
       capabilities: [],
       enabled: true,
       config: {},
+      created_at: "2026-03-15T00:00:00.000Z",
+      updated_at: "2026-03-15T00:00:00.000Z",
+    });
+    state.workflows.set("workflow-1", {
+      workflow_id: "workflow-1",
+      name: "Workflow One",
+      status: "pending",
+      metadata: null,
       created_at: "2026-03-15T00:00:00.000Z",
       updated_at: "2026-03-15T00:00:00.000Z",
     });
@@ -282,6 +388,7 @@ describe("standalone runtime composition", () => {
       factories: {
         createPool: () => pool,
         createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => workerResources),
         registerShutdownHandlers: () => vi.fn(),
       },
     });
@@ -312,24 +419,28 @@ describe("standalone runtime composition", () => {
       status: "queued",
       assignee_agent_id: "agent-1",
     });
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "running",
+    });
   });
 
   it("keeps the error response shape when the real composition hits a pg conflict", async () => {
     const { pool, state } = createInMemoryPool();
     const { queueResources } = createQueueResources();
-
-    state.setFailNextQuery(createPgError("23505", "duplicate agent"));
+    const workerResources = createWorkerResources();
 
     const result = await bootstrapServer({
       env: createEnv(),
       factories: {
         createPool: () => pool,
         createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => workerResources),
         registerShutdownHandlers: () => vi.fn(),
       },
     });
 
     shutdowns.push(() => result.shutdown.shutdown());
+    state.setFailNextQuery(createPgError("23505", "duplicate agent"));
 
     const response = await result.app.inject({
       method: "POST",

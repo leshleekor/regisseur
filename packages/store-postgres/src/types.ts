@@ -29,6 +29,16 @@ export interface WorkflowRow extends QueryResultRow {
   updated_at: TimestampValue;
 }
 
+export interface WorkflowDefinitionRow extends QueryResultRow {
+  workflow_definition_id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  metadata: unknown | null;
+  created_at: TimestampValue;
+  updated_at: TimestampValue;
+}
+
 export interface TaskRow extends QueryResultRow {
   task_id: string;
   workflow_id: string;
@@ -46,6 +56,25 @@ export interface TaskRow extends QueryResultRow {
 export interface TaskEdgeRow extends QueryResultRow {
   from_task_id: string;
   to_task_id: string;
+  type: string;
+}
+
+export interface TaskTemplateRow extends QueryResultRow {
+  task_template_id: string;
+  workflow_definition_id: string;
+  title: string;
+  payload: unknown;
+  default_assignee_agent_id: string | null;
+  retry_count: number;
+  concurrency_key: string | null;
+  metadata: unknown | null;
+  created_at: TimestampValue;
+  updated_at: TimestampValue;
+}
+
+export interface TaskTemplateEdgeRow extends QueryResultRow {
+  from_task_template_id: string;
+  to_task_template_id: string;
   type: string;
 }
 
@@ -93,6 +122,16 @@ export interface WorkflowRowInput {
   updated_at: string;
 }
 
+export interface WorkflowDefinitionRowInput {
+  workflow_definition_id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskRowInput {
   task_id: string;
   workflow_id: string;
@@ -110,6 +149,25 @@ export interface TaskRowInput {
 export interface TaskEdgeRowInput {
   from_task_id: string;
   to_task_id: string;
+  type: string;
+}
+
+export interface TaskTemplateRowInput {
+  task_template_id: string;
+  workflow_definition_id: string;
+  title: string;
+  payload: string;
+  default_assignee_agent_id: string | null;
+  retry_count: number;
+  concurrency_key: string | null;
+  metadata: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskTemplateEdgeRowInput {
+  from_task_template_id: string;
+  to_task_template_id: string;
   type: string;
 }
 

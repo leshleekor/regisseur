@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
-import { notFound } from "../errors/http-error.js";
+import { badGateway, notFound } from "../errors/http-error.js";
+import { registerPersistedSchedule } from "../schedules/registration.js";
 import {
   parseScheduleBody,
   parseSchedulesQuery,
@@ -16,6 +17,26 @@ export function registerScheduleRoutes(
     const schedule = parseScheduleBody(request.body);
 
     await deps.schedulesRepository.upsert(schedule);
+
+    if (schedule.enabled) {
+      if (!deps.scheduleRegistrationPort) {
+        throw new Error("Missing dependency: scheduleRegistrationPort");
+      }
+
+      try {
+        await registerPersistedSchedule(
+          schedule,
+          deps.scheduleRegistrationPort,
+        );
+      } catch (error) {
+        throw badGateway(
+          "SCHEDULE_REGISTRATION_FAILED",
+          error instanceof Error
+            ? error.message
+            : `Unknown schedule registration failure for ${schedule.scheduleId}`,
+        );
+      }
+    }
 
     return schedule;
   });

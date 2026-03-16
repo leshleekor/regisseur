@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import type { BullMqConnectionConfig } from "@regisseur/queue-bullmq";
 
 import { buildApp } from "./app.js";
 import { createStandaloneServerDependencies } from "./dependencies/create-dependencies.js";
+import type { CreateDispatchWorkerOptions } from "./dependencies/create-dispatch-worker.js";
 import { loadServerConfig } from "./env.js";
 import { migrateOnStart } from "./lifecycle/migrate-on-start.js";
+import { registerPersistedSchedulesOnStart } from "./schedules/registration.js";
 import {
   createShutdownController,
   registerShutdownHandlers,
@@ -23,8 +24,13 @@ export interface BootstrapFactories {
   createQueueResources?: (
     config: BootstrapServerResult["config"],
   ) => QueueResources;
+  createExecutableAdapterRegistry?: NonNullable<
+    Parameters<
+      typeof createStandaloneServerDependencies
+    >[0]["createExecutableAdapterRegistry"]
+  >;
   createWorkerResources?: (
-    connection: BullMqConnectionConfig,
+    options: CreateDispatchWorkerOptions,
   ) => WorkerResources;
   runMigrations?: (pool: PostgresPoolLike) => Promise<void>;
   buildApp?: (deps: BootstrapServerResult["dependencies"]) => FastifyInstance;
@@ -57,6 +63,8 @@ export async function bootstrapServer(
     config,
     createPool: options.factories?.createPool,
     createQueueResources: options.factories?.createQueueResources,
+    createExecutableAdapterRegistry:
+      options.factories?.createExecutableAdapterRegistry,
     createWorkerResources: options.factories?.createWorkerResources,
   });
 
@@ -66,6 +74,12 @@ export async function bootstrapServer(
       composition.pool,
       options.factories?.runMigrations,
     );
+    if (composition.dependencies.scheduleRegistrationPort) {
+      await registerPersistedSchedulesOnStart(
+        composition.repositories.schedulesRepository,
+        composition.dependencies.scheduleRegistrationPort,
+      );
+    }
 
     const app = (options.factories?.buildApp ?? buildApp)(
       composition.dependencies,

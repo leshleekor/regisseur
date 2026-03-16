@@ -6,21 +6,24 @@ import type {
   Schedule,
   Task,
   TaskEdge,
+  TaskTemplate,
+  TaskTemplateEdge,
   Workflow,
+  WorkflowDefinition,
 } from "@regisseur/core";
-import type { DispatchTaskResult } from "@regisseur/dispatcher";
 
 import { buildApp } from "./app.js";
-import { createDispatcherLike } from "./plugins/dispatcher.js";
 import { createServerDependencies } from "./plugins/repositories.js";
 import type {
   AgentsRepositoryLike,
-  DispatcherLike,
   RunsRepositoryLike,
   SchedulesRepositoryLike,
   ServerDependencies,
   TaskEdgesRepositoryLike,
+  TaskTemplateEdgesRepositoryLike,
+  TaskTemplatesRepositoryLike,
   TasksRepositoryLike,
+  WorkflowDefinitionsRepositoryLike,
   WorkflowsRepositoryLike,
 } from "./types.js";
 
@@ -129,6 +132,9 @@ interface TestContext {
     workflows: Map<string, Workflow>;
     tasks: Map<string, Task>;
     taskEdges: TaskEdge[];
+    workflowDefinitions: Map<string, WorkflowDefinition>;
+    taskTemplates: Map<string, TaskTemplate>;
+    taskTemplateEdges: TaskTemplateEdge[];
     schedules: Map<string, Schedule>;
     runs: Map<string, Run>;
   };
@@ -138,9 +144,16 @@ interface TestContext {
     workflows: Record<string, ReturnType<typeof vi.fn>>;
     tasks: Record<string, ReturnType<typeof vi.fn>>;
     taskEdges: Record<string, ReturnType<typeof vi.fn>>;
+    workflowDefinitions: Record<string, ReturnType<typeof vi.fn>>;
+    taskTemplates: Record<string, ReturnType<typeof vi.fn>>;
+    taskTemplateEdges: Record<string, ReturnType<typeof vi.fn>>;
     schedules: Record<string, ReturnType<typeof vi.fn>>;
     runs: Record<string, ReturnType<typeof vi.fn>>;
-    dispatcher: ReturnType<typeof vi.fn>;
+    enqueueTaskDispatch: ReturnType<typeof vi.fn>;
+    scheduleRegistration: {
+      enqueueScheduleTrigger: ReturnType<typeof vi.fn>;
+      registerCronScheduleTrigger: ReturnType<typeof vi.fn>;
+    };
   };
 }
 
@@ -150,6 +163,9 @@ function createTestContext(): TestContext {
     workflows: new Map<string, Workflow>(),
     tasks: new Map<string, Task>(),
     taskEdges: [],
+    workflowDefinitions: new Map<string, WorkflowDefinition>(),
+    taskTemplates: new Map<string, TaskTemplate>(),
+    taskTemplateEdges: [],
     schedules: new Map<string, Schedule>(),
     runs: new Map<string, Run>(),
   };
@@ -224,6 +240,124 @@ function createTestContext(): TestContext {
     state.tasks.delete(taskId);
   });
 
+  const workflowDefinitionsUpsert = vi.fn(
+    async (workflowDefinition: WorkflowDefinition) => {
+      callLog.push("workflowDefinitions.upsert");
+      state.workflowDefinitions.set(
+        workflowDefinition.workflowDefinitionId,
+        workflowDefinition,
+      );
+    },
+  );
+  const workflowDefinitionsFindAll = vi.fn(async () => {
+    callLog.push("workflowDefinitions.findAll");
+    return Array.from(state.workflowDefinitions.values());
+  });
+  const workflowDefinitionsFindEnabled = vi.fn(async () => {
+    callLog.push("workflowDefinitions.findEnabled");
+    return Array.from(state.workflowDefinitions.values()).filter(
+      (workflowDefinition) => workflowDefinition.enabled,
+    );
+  });
+  const workflowDefinitionsFindById = vi.fn(
+    async (workflowDefinitionId: string) => {
+      callLog.push("workflowDefinitions.findById");
+      return state.workflowDefinitions.get(workflowDefinitionId) ?? null;
+    },
+  );
+  const workflowDefinitionsDeleteById = vi.fn(
+    async (workflowDefinitionId: string) => {
+      callLog.push("workflowDefinitions.deleteById");
+      state.workflowDefinitions.delete(workflowDefinitionId);
+    },
+  );
+
+  const taskTemplatesUpsert = vi.fn(async (taskTemplate: TaskTemplate) => {
+    callLog.push("taskTemplates.upsert");
+    state.taskTemplates.set(taskTemplate.taskTemplateId, taskTemplate);
+  });
+  const taskTemplatesFindByWorkflowDefinitionId = vi.fn(
+    async (workflowDefinitionId: string) => {
+      callLog.push("taskTemplates.findByWorkflowDefinitionId");
+      return Array.from(state.taskTemplates.values()).filter(
+        (taskTemplate) =>
+          taskTemplate.workflowDefinitionId === workflowDefinitionId,
+      );
+    },
+  );
+  const taskTemplatesFindById = vi.fn(async (taskTemplateId: string) => {
+    callLog.push("taskTemplates.findById");
+    return state.taskTemplates.get(taskTemplateId) ?? null;
+  });
+  const taskTemplatesDeleteById = vi.fn(async (taskTemplateId: string) => {
+    callLog.push("taskTemplates.deleteById");
+    state.taskTemplates.delete(taskTemplateId);
+  });
+
+  const taskTemplateEdgesInsert = vi.fn(async (edge: TaskTemplateEdge) => {
+    callLog.push("taskTemplateEdges.insert");
+    state.taskTemplateEdges.push(edge);
+  });
+  const taskTemplateEdgesInsertMany = vi.fn(
+    async (edges: readonly TaskTemplateEdge[]) => {
+      callLog.push("taskTemplateEdges.insertMany");
+      state.taskTemplateEdges.push(...edges);
+    },
+  );
+  const taskTemplateEdgesFindAllByWorkflowDefinitionTaskTemplates = vi.fn(
+    async (taskTemplateIds: readonly string[]) => {
+      callLog.push(
+        "taskTemplateEdges.findAllByWorkflowDefinitionTaskTemplates",
+      );
+      const taskTemplateIdSet = new Set(taskTemplateIds);
+
+      return state.taskTemplateEdges.filter(
+        (edge) =>
+          taskTemplateIdSet.has(edge.fromTaskTemplateId) &&
+          taskTemplateIdSet.has(edge.toTaskTemplateId),
+      );
+    },
+  );
+  const taskTemplateEdgesFindByFromTaskTemplateId = vi.fn(
+    async (taskTemplateId: string) => {
+      callLog.push("taskTemplateEdges.findByFromTaskTemplateId");
+      return state.taskTemplateEdges.filter(
+        (edge) => edge.fromTaskTemplateId === taskTemplateId,
+      );
+    },
+  );
+  const taskTemplateEdgesFindByToTaskTemplateId = vi.fn(
+    async (taskTemplateId: string) => {
+      callLog.push("taskTemplateEdges.findByToTaskTemplateId");
+      return state.taskTemplateEdges.filter(
+        (edge) => edge.toTaskTemplateId === taskTemplateId,
+      );
+    },
+  );
+  const taskTemplateEdgesDeleteByTaskTemplateId = vi.fn(
+    async (taskTemplateId: string) => {
+      callLog.push("taskTemplateEdges.deleteByTaskTemplateId");
+      state.taskTemplateEdges = state.taskTemplateEdges.filter(
+        (edge) =>
+          edge.fromTaskTemplateId !== taskTemplateId &&
+          edge.toTaskTemplateId !== taskTemplateId,
+      );
+    },
+  );
+  const taskTemplateEdgesDeleteEdge = vi.fn(
+    async (fromTaskTemplateId: string, toTaskTemplateId: string) => {
+      callLog.push("taskTemplateEdges.deleteEdge");
+      state.taskTemplateEdges = state.taskTemplateEdges.filter(
+        (edge) =>
+          !(
+            edge.fromTaskTemplateId === fromTaskTemplateId &&
+            edge.toTaskTemplateId === toTaskTemplateId &&
+            edge.type === "depends_on"
+          ),
+      );
+    },
+  );
+
   const schedulesUpsert = vi.fn(async (schedule: Schedule) => {
     callLog.push("schedules.upsert");
     state.schedules.set(schedule.scheduleId, schedule);
@@ -261,6 +395,19 @@ function createTestContext(): TestContext {
       (edge) => edge.fromTaskId !== taskId && edge.toTaskId !== taskId,
     );
   });
+  const taskEdgesDeleteEdge = vi.fn(
+    async (fromTaskId: string, toTaskId: string) => {
+      callLog.push("taskEdges.deleteEdge");
+      state.taskEdges = state.taskEdges.filter(
+        (edge) =>
+          !(
+            edge.fromTaskId === fromTaskId &&
+            edge.toTaskId === toTaskId &&
+            edge.type === "depends_on"
+          ),
+      );
+    },
+  );
   const schedulesFindAll = vi.fn(async () => {
     callLog.push("schedules.findAll");
     return Array.from(state.schedules.values());
@@ -320,29 +467,6 @@ function createTestContext(): TestContext {
     state.runs.delete(runId);
   });
 
-  const dispatcherDispatch = vi.fn(
-    async (
-      task: Task,
-      agents: readonly AgentDefinition[],
-      options?: { triggerSource?: "manual" | "schedule" | "internal" },
-    ): Promise<DispatchTaskResult> => {
-      callLog.push("dispatcher.dispatch");
-
-      return {
-        ok: true,
-        taskId: task.taskId,
-        workflowId: task.workflowId,
-        agentId: task.assigneeAgentId ?? agents[0]?.agentId ?? "agent-1",
-        enqueueResult: {
-          ok: true,
-          jobId: options?.triggerSource
-            ? `job-${options.triggerSource}`
-            : `job-${task.taskId}`,
-        },
-      };
-    },
-  );
-
   const agentsRepository: AgentsRepositoryLike = {
     upsert: agentsUpsert,
     findAll: agentsFindAll,
@@ -364,6 +488,29 @@ function createTestContext(): TestContext {
     findById: tasksFindById,
     deleteById: tasksDeleteById,
   };
+  const workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike = {
+    upsert: workflowDefinitionsUpsert,
+    findAll: workflowDefinitionsFindAll,
+    findEnabled: workflowDefinitionsFindEnabled,
+    findById: workflowDefinitionsFindById,
+    deleteById: workflowDefinitionsDeleteById,
+  };
+  const taskTemplatesRepository: TaskTemplatesRepositoryLike = {
+    upsert: taskTemplatesUpsert,
+    findByWorkflowDefinitionId: taskTemplatesFindByWorkflowDefinitionId,
+    findById: taskTemplatesFindById,
+    deleteById: taskTemplatesDeleteById,
+  };
+  const taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike = {
+    insert: taskTemplateEdgesInsert,
+    insertMany: taskTemplateEdgesInsertMany,
+    findAllByWorkflowDefinitionTaskTemplates:
+      taskTemplateEdgesFindAllByWorkflowDefinitionTaskTemplates,
+    findByFromTaskTemplateId: taskTemplateEdgesFindByFromTaskTemplateId,
+    findByToTaskTemplateId: taskTemplateEdgesFindByToTaskTemplateId,
+    deleteByTaskTemplateId: taskTemplateEdgesDeleteByTaskTemplateId,
+    deleteEdge: taskTemplateEdgesDeleteEdge,
+  };
   const schedulesRepository: SchedulesRepositoryLike = {
     upsert: schedulesUpsert,
     findAll: schedulesFindAll,
@@ -379,6 +526,7 @@ function createTestContext(): TestContext {
     findByFromTaskId: taskEdgesFindByFromTaskId,
     findByToTaskId: taskEdgesFindByToTaskId,
     deleteByTaskId: taskEdgesDeleteByTaskId,
+    deleteEdge: taskEdgesDeleteEdge,
   };
   const runsRepository: RunsRepositoryLike = {
     upsert: runsUpsert,
@@ -388,9 +536,32 @@ function createTestContext(): TestContext {
     findById: runsFindById,
     deleteById: runsDeleteById,
   };
-  const dispatcher: DispatcherLike = {
-    dispatch: dispatcherDispatch,
-  };
+  const enqueueTaskDispatch = vi.fn(
+    async (request: { triggerSource: "manual" | "schedule" | "internal" }) => {
+      callLog.push("enqueuePort.enqueueTaskDispatch");
+
+      return {
+        ok: true as const,
+        jobId: `job-${request.triggerSource}`,
+      };
+    },
+  );
+  const enqueueScheduleTrigger = vi.fn(async () => {
+    callLog.push("scheduleRegistration.enqueueScheduleTrigger");
+
+    return {
+      jobId: "schedule-job-1",
+      jobName: "schedule.trigger",
+    };
+  });
+  const registerCronScheduleTrigger = vi.fn(async () => {
+    callLog.push("scheduleRegistration.registerCronScheduleTrigger");
+
+    return {
+      jobId: "schedule-job-1",
+      jobName: "schedule.trigger",
+    };
+  });
 
   return {
     deps: createServerDependencies(
@@ -399,10 +570,19 @@ function createTestContext(): TestContext {
         workflowsRepository,
         tasksRepository,
         taskEdgesRepository,
+        workflowDefinitionsRepository,
+        taskTemplatesRepository,
+        taskTemplateEdgesRepository,
         schedulesRepository,
         runsRepository,
       },
-      dispatcher,
+      {
+        enqueueTaskDispatch,
+      },
+      {
+        enqueueScheduleTrigger,
+        registerCronScheduleTrigger,
+      },
       false,
     ),
     state,
@@ -436,6 +616,30 @@ function createTestContext(): TestContext {
         findByFromTaskId: taskEdgesFindByFromTaskId,
         findByToTaskId: taskEdgesFindByToTaskId,
         deleteByTaskId: taskEdgesDeleteByTaskId,
+        deleteEdge: taskEdgesDeleteEdge,
+      },
+      workflowDefinitions: {
+        upsert: workflowDefinitionsUpsert,
+        findAll: workflowDefinitionsFindAll,
+        findEnabled: workflowDefinitionsFindEnabled,
+        findById: workflowDefinitionsFindById,
+        deleteById: workflowDefinitionsDeleteById,
+      },
+      taskTemplates: {
+        upsert: taskTemplatesUpsert,
+        findByWorkflowDefinitionId: taskTemplatesFindByWorkflowDefinitionId,
+        findById: taskTemplatesFindById,
+        deleteById: taskTemplatesDeleteById,
+      },
+      taskTemplateEdges: {
+        insert: taskTemplateEdgesInsert,
+        insertMany: taskTemplateEdgesInsertMany,
+        findAllByWorkflowDefinitionTaskTemplates:
+          taskTemplateEdgesFindAllByWorkflowDefinitionTaskTemplates,
+        findByFromTaskTemplateId: taskTemplateEdgesFindByFromTaskTemplateId,
+        findByToTaskTemplateId: taskTemplateEdgesFindByToTaskTemplateId,
+        deleteByTaskTemplateId: taskTemplateEdgesDeleteByTaskTemplateId,
+        deleteEdge: taskTemplateEdgesDeleteEdge,
       },
       schedules: {
         upsert: schedulesUpsert,
@@ -453,7 +657,11 @@ function createTestContext(): TestContext {
         findById: runsFindById,
         deleteById: runsDeleteById,
       },
-      dispatcher: dispatcherDispatch,
+      enqueueTaskDispatch,
+      scheduleRegistration: {
+        enqueueScheduleTrigger,
+        registerCronScheduleTrigger,
+      },
     },
   };
 }
@@ -1076,10 +1284,8 @@ describe("server app", () => {
   describe("Tasks dispatch API", () => {
     it("POST /tasks/:taskId/dispatch returns 200 on success", async () => {
       const ctx = createTestContext();
-      ctx.state.tasks.set(
-        "task-1",
-        createTask("task-1", "workflow-1", { assigneeAgentId: "agent-1" }),
-      );
+      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
       app = buildApp(ctx.deps);
 
@@ -1099,7 +1305,7 @@ describe("server app", () => {
           jobId: "job-manual",
         },
       });
-      expect(ctx.spies.dispatcher).toHaveBeenCalledTimes(1);
+      expect(ctx.spies.enqueueTaskDispatch).toHaveBeenCalledTimes(1);
       expect(ctx.spies.tasks.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           taskId: "task-1",
@@ -1108,11 +1314,18 @@ describe("server app", () => {
           updatedAt: expect.any(String),
         }),
       );
+      expect(ctx.spies.workflows.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "workflow-1",
+          status: "running",
+        }),
+      );
     });
 
     it("POST /tasks/:taskId/dispatch defaults triggerSource to manual", async () => {
       const ctx = createTestContext();
       ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
       app = buildApp(ctx.deps);
 
@@ -1121,16 +1334,20 @@ describe("server app", () => {
         url: "/tasks/task-1/dispatch",
       });
 
-      expect(ctx.spies.dispatcher).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Array),
-        { triggerSource: "manual" },
+      expect(ctx.spies.enqueueTaskDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: "task-1",
+          workflowId: "workflow-1",
+          agentId: "agent-1",
+          triggerSource: "manual",
+        }),
       );
     });
 
-    it("POST /tasks/:taskId/dispatch forwards triggerSource to dispatcher", async () => {
+    it("POST /tasks/:taskId/dispatch forwards triggerSource to enqueue", async () => {
       const ctx = createTestContext();
       ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
       app = buildApp(ctx.deps);
 
@@ -1143,14 +1360,9 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(ctx.spies.dispatcher).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.any(Array),
-        { triggerSource: "schedule" },
-      );
-      expect(ctx.spies.tasks.upsert).toHaveBeenCalledWith(
+      expect(ctx.spies.enqueueTaskDispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          status: "queued",
+          triggerSource: "schedule",
         }),
       );
     });
@@ -1165,7 +1377,7 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(404);
-      expect(ctx.spies.dispatcher).not.toHaveBeenCalled();
+      expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch maps TASK_NOT_READY to 409", async () => {
@@ -1174,14 +1386,6 @@ describe("server app", () => {
         "task-1",
         createTask("task-1", "workflow-1", { status: "pending" }),
       );
-      ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "TASK_NOT_READY",
-        message: "Task is not ready",
-      }));
       app = buildApp(ctx.deps);
 
       const response = await app.inject({
@@ -1193,20 +1397,51 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("TASK_NOT_READY");
+      expect(ctx.spies.agents.findAll).not.toHaveBeenCalled();
       expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
+    });
+
+    it("POST /tasks/:taskId/dispatch rejects every non-ready task status", async () => {
+      const blockedStatuses = [
+        "pending",
+        "blocked",
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+      ] as const;
+
+      for (const status of blockedStatuses) {
+        const ctx = createTestContext();
+        ctx.state.tasks.set(
+          "task-1",
+          createTask("task-1", "workflow-1", { status }),
+        );
+        app = buildApp(ctx.deps);
+
+        const response = await app.inject({
+          method: "POST",
+          url: "/tasks/task-1/dispatch",
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
+        expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
+
+        await app.close();
+        app = undefined;
+      }
     });
 
     it("POST /tasks/:taskId/dispatch maps ASSIGNEE_NOT_FOUND to 409", async () => {
       const ctx = createTestContext();
-      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          assigneeAgentId: "missing-agent",
+        }),
+      );
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "ASSIGNEE_NOT_FOUND",
-        message: "Missing assignee",
-      }));
       app = buildApp(ctx.deps);
 
       const response = await app.inject({
@@ -1223,15 +1458,16 @@ describe("server app", () => {
 
     it("POST /tasks/:taskId/dispatch maps ASSIGNEE_DISABLED to 409", async () => {
       const ctx = createTestContext();
-      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
-      ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "ASSIGNEE_DISABLED",
-        message: "Assignee disabled",
-      }));
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          assigneeAgentId: "agent-1",
+        }),
+      );
+      ctx.state.agents.set(
+        "agent-1",
+        createAgent("agent-1", { enabled: false }),
+      );
       app = buildApp(ctx.deps);
 
       const response = await app.inject({
@@ -1245,15 +1481,20 @@ describe("server app", () => {
 
     it("POST /tasks/:taskId/dispatch maps NO_MATCHING_AGENT to 409", async () => {
       const ctx = createTestContext();
-      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
-      ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "NO_MATCHING_AGENT",
-        message: "No matching agent",
-      }));
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          metadata: {
+            requiredCapabilities: ["shell"],
+          },
+        }),
+      );
+      ctx.state.agents.set(
+        "agent-1",
+        createAgent("agent-1", {
+          capabilities: ["http"],
+        }),
+      );
       app = buildApp(ctx.deps);
 
       const response = await app.inject({
@@ -1268,12 +1509,10 @@ describe("server app", () => {
     it("POST /tasks/:taskId/dispatch maps ENQUEUE_FAILED to 502", async () => {
       const ctx = createTestContext();
       ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "ENQUEUE_FAILED",
+      ctx.deps.enqueuePort.enqueueTaskDispatch = vi.fn(async () => ({
+        ok: false as const,
         message: "queue down",
       }));
       app = buildApp(ctx.deps);
@@ -1287,7 +1526,11 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("ENQUEUE_FAILED");
-      expect(ctx.spies.tasks.upsert).not.toHaveBeenCalled();
+      expect(ctx.spies.tasks.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "queued",
+        }),
+      );
     });
 
     it("POST /tasks/:taskId/dispatch returns 500 when queued state persistence fails", async () => {
@@ -1308,6 +1551,7 @@ describe("server app", () => {
       expect(
         responseJson<{ error: { code: string } }>(response).error.code,
       ).toBe("INTERNAL_SERVER_ERROR");
+      expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
     });
 
     it("POST /tasks/:taskId/dispatch validates triggerSource", async () => {
@@ -1325,12 +1569,13 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(400);
-      expect(ctx.spies.dispatcher).not.toHaveBeenCalled();
+      expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
     });
 
-    it("POST /tasks/:taskId/dispatch fetches task then agents before dispatch", async () => {
+    it("POST /tasks/:taskId/dispatch persists queued task and workflow before enqueue", async () => {
       const ctx = createTestContext();
       ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
       app = buildApp(ctx.deps);
 
@@ -1342,8 +1587,11 @@ describe("server app", () => {
       expect(ctx.callLog).toEqual([
         "tasks.findById",
         "agents.findAll",
-        "dispatcher.dispatch",
         "tasks.upsert",
+        "workflows.findById",
+        "tasks.findByWorkflowId",
+        "workflows.upsert",
+        "enqueuePort.enqueueTaskDispatch",
       ]);
     });
   });
@@ -1362,6 +1610,24 @@ describe("server app", () => {
 
       expect(response.statusCode).toBe(200);
       expect(responseJson<Schedule>(response)).toEqual(schedule);
+      expect(ctx.spies.schedules.upsert).toHaveBeenCalledWith(schedule);
+      expect(
+        ctx.spies.scheduleRegistration.enqueueScheduleTrigger,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        ctx.spies.scheduleRegistration.enqueueScheduleTrigger,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduleId: "schedule-1",
+          targetType: "workflow",
+          targetId: "workflow-1",
+          triggeredAt: expect.any(String),
+        }),
+        expect.objectContaining({
+          delayMs: expect.any(Number),
+          jobId: "schedule-1",
+        }),
+      );
     });
 
     it("POST /schedules accepts a cron schedule", async () => {
@@ -1384,6 +1650,21 @@ describe("server app", () => {
 
       expect(response.statusCode).toBe(200);
       expect(responseJson<Schedule>(response)).toEqual(schedule);
+      expect(
+        ctx.spies.scheduleRegistration.registerCronScheduleTrigger,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduleId: "schedule-1",
+          targetType: "task",
+          targetId: "task-1",
+          triggeredAt: expect.any(String),
+        }),
+        {
+          cronExpression: "0 * * * *",
+          jobId: "schedule-1",
+          timezone: "Asia/Seoul",
+        },
+      );
     });
 
     it("POST /schedules rejects invalid once combinations", async () => {
@@ -1569,18 +1850,44 @@ describe("server app", () => {
       expect(response.body).toBe("");
     });
 
-    it("POST /schedules only performs persistence work", async () => {
+    it("POST /schedules skips registration for disabled schedules", async () => {
       const ctx = createTestContext();
       app = buildApp(ctx.deps);
 
       await app.inject({
         method: "POST",
         url: "/schedules",
-        payload: createSchedule("schedule-1"),
+        payload: createSchedule("schedule-1", { enabled: false }),
       });
 
       expect(ctx.spies.schedules.upsert).toHaveBeenCalledTimes(1);
-      expect(ctx.spies.dispatcher).not.toHaveBeenCalled();
+      expect(
+        ctx.spies.scheduleRegistration.enqueueScheduleTrigger,
+      ).not.toHaveBeenCalled();
+      expect(
+        ctx.spies.scheduleRegistration.registerCronScheduleTrigger,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("POST /schedules returns 502 when registration fails after persistence", async () => {
+      const ctx = createTestContext();
+
+      ctx.spies.scheduleRegistration.enqueueScheduleTrigger.mockRejectedValueOnce(
+        new Error("schedule queue unavailable"),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/schedules",
+        payload: createSchedule("schedule-1"),
+      });
+
+      expect(response.statusCode).toBe(502);
+      expect(ctx.spies.schedules.upsert).toHaveBeenCalledTimes(1);
+      expect(ctx.state.schedules.get("schedule-1")).toEqual(
+        createSchedule("schedule-1"),
+      );
     });
   });
 
@@ -1877,17 +2184,17 @@ describe("server app", () => {
       expect(response.body.includes("sensitive stack")).toBe(false);
     });
 
-    it("dispatcher failures use the dispatcher reason as the HTTP error code", async () => {
+    it("dispatch selection failures use the selection reason as the HTTP error code", async () => {
       const ctx = createTestContext();
-      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          metadata: {
+            requiredCapabilities: ["shell"],
+          },
+        }),
+      );
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
-      ctx.deps.dispatcher.dispatch = vi.fn(async () => ({
-        ok: false,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        reason: "TASK_NOT_READY",
-        message: "Task is not ready for dispatch",
-      }));
       app = buildApp(ctx.deps);
 
       const response = await app.inject({
@@ -1898,8 +2205,9 @@ describe("server app", () => {
       expect(response.statusCode).toBe(409);
       expect(responseJson(response)).toEqual({
         error: {
-          code: "TASK_NOT_READY",
-          message: "Task is not ready for dispatch",
+          code: "NO_MATCHING_AGENT",
+          message:
+            "Task task-1 has no enabled agent matching capabilities: shell",
         },
       });
     });
@@ -1918,10 +2226,11 @@ describe("server app", () => {
       expect(response.statusCode).toBe(200);
     });
 
-    it("fake repositories and a fake dispatcher can fully drive the app", async () => {
+    it("fake repositories and a fake enqueue port can fully drive the app", async () => {
       const ctx = createTestContext();
       ctx.state.agents.set("agent-1", createAgent("agent-1"));
       ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
       app = buildApp(ctx.deps);
 
       const agentsResponse = await app.inject({
@@ -1961,41 +2270,17 @@ describe("server app", () => {
           workflowsRepository: {} as WorkflowsRepositoryLike,
           tasksRepository: {} as TasksRepositoryLike,
           taskEdgesRepository: {} as TaskEdgesRepositoryLike,
+          workflowDefinitionsRepository:
+            {} as WorkflowDefinitionsRepositoryLike,
+          taskTemplatesRepository: {} as TaskTemplatesRepositoryLike,
+          taskTemplateEdgesRepository: {} as TaskTemplateEdgesRepositoryLike,
           schedulesRepository: {} as SchedulesRepositoryLike,
           runsRepository: {} as RunsRepositoryLike,
-          dispatcher: {} as DispatcherLike,
+          enqueuePort: {
+            enqueueTaskDispatch: vi.fn(),
+          },
         }),
       ).toThrow("Missing dependency: agentsRepository");
-    });
-
-    it("createDispatcherLike binds enqueuePort into a DispatcherLike facade", async () => {
-      const enqueuePort = {
-        enqueueTaskDispatch: vi.fn(async () => ({
-          ok: true as const,
-          jobId: "job-1",
-        })),
-      };
-      const dispatcher = createDispatcherLike(enqueuePort);
-
-      const result = await dispatcher.dispatch(
-        createTask("task-1", "workflow-1"),
-        [createAgent("agent-1")],
-        {
-          triggerSource: "manual",
-        },
-      );
-
-      expect(result).toEqual({
-        ok: true,
-        taskId: "task-1",
-        workflowId: "workflow-1",
-        agentId: "agent-1",
-        enqueueResult: {
-          ok: true,
-          jobId: "job-1",
-        },
-      });
-      expect(enqueuePort.enqueueTaskDispatch).toHaveBeenCalledTimes(1);
     });
   });
 });

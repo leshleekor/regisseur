@@ -77,6 +77,7 @@ describe("scheduler registration helpers", () => {
       },
       {
         delayMs: 5_000,
+        jobId: "schedule-1",
       },
     );
     expect(result).toEqual<RegisteredScheduleResult>({
@@ -118,6 +119,7 @@ describe("scheduler registration helpers", () => {
       },
       {
         cronExpression: "0 9 * * *",
+        jobId: "schedule-1",
         timezone: "Asia/Seoul",
       },
     );

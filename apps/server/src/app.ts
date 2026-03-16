@@ -6,7 +6,11 @@ import { registerAgentRoutes } from "./routes/agents.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerScheduleRoutes } from "./routes/schedules.js";
+import { registerTaskEdgeRoutes } from "./routes/task-edges.js";
+import { registerTaskTemplateEdgeRoutes } from "./routes/task-template-edges.js";
+import { registerTaskTemplateRoutes } from "./routes/task-templates.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerWorkflowDefinitionRoutes } from "./routes/workflow-definitions.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 import type { ServerDependencies } from "./types.js";
 
@@ -26,9 +30,18 @@ function assertServerDependencies(
   assertDependency(deps.workflowsRepository, "workflowsRepository");
   assertDependency(deps.tasksRepository, "tasksRepository");
   assertDependency(deps.taskEdgesRepository, "taskEdgesRepository");
+  assertDependency(
+    deps.workflowDefinitionsRepository,
+    "workflowDefinitionsRepository",
+  );
+  assertDependency(deps.taskTemplatesRepository, "taskTemplatesRepository");
+  assertDependency(
+    deps.taskTemplateEdgesRepository,
+    "taskTemplateEdgesRepository",
+  );
   assertDependency(deps.schedulesRepository, "schedulesRepository");
   assertDependency(deps.runsRepository, "runsRepository");
-  assertDependency(deps.dispatcher, "dispatcher");
+  assertDependency(deps.enqueuePort, "enqueuePort");
 }
 
 export function buildApp(deps: Partial<ServerDependencies>): FastifyInstance {
@@ -42,7 +55,11 @@ export function buildApp(deps: Partial<ServerDependencies>): FastifyInstance {
   registerHealthRoutes(app);
   registerAgentRoutes(app, deps);
   registerWorkflowRoutes(app, deps);
+  registerWorkflowDefinitionRoutes(app, deps);
   registerTaskRoutes(app, deps);
+  registerTaskEdgeRoutes(app, deps);
+  registerTaskTemplateRoutes(app, deps);
+  registerTaskTemplateEdgeRoutes(app, deps);
   registerScheduleRoutes(app, deps);
   registerRunRoutes(app, deps);
 

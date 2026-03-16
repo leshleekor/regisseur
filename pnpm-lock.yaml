@@ -33,6 +33,15 @@ importers:
 
   apps/server:
     dependencies:
+      '@regisseur/adapter-cli':
+        specifier: workspace:*
+        version: link:../../packages/adapter-cli
+      '@regisseur/adapter-http':
+        specifier: workspace:*
+        version: link:../../packages/adapter-http
+      '@regisseur/adapter-openclaw':
+        specifier: workspace:*
+        version: link:../../packages/adapter-openclaw
       '@regisseur/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -42,6 +51,9 @@ importers:
       '@regisseur/queue-bullmq':
         specifier: workspace:*
         version: link:../../packages/queue-bullmq
+      '@regisseur/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@regisseur/store-postgres':
         specifier: workspace:*
         version: link:../../packages/store-postgres

@@ -14,9 +14,9 @@ export interface CreateEnqueuePortOptions {
 }
 
 /**
- * Dispatcher currently selects an agent before enqueue, but the queue payload
- * does not carry agentId yet. The execution worker will need to recover that
- * relationship later from persisted task state or by re-selection.
+ * The durable dispatch sequence is save task -> update workflow -> enqueue.
+ * The queue payload intentionally omits agentId, so the execution worker must
+ * recover the selected agent from persisted task.assigneeAgentId.
  */
 export function mapDispatchRequestToTaskDispatchJobPayload(
   request: DispatchRequest,

@@ -4,6 +4,8 @@ export * from "./domain/schedule.js";
 export * from "./domain/shared.js";
 export * from "./domain/status.js";
 export * from "./domain/task.js";
+export * from "./domain/task-template.js";
 export * from "./domain/workflow.js";
+export * from "./domain/workflow-definition.js";
 export * from "./graph/dependency.js";
 export * from "./graph/readiness.js";

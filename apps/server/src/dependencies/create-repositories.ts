@@ -3,7 +3,10 @@ import {
   PostgresRunsRepository,
   PostgresSchedulesRepository,
   PostgresTaskEdgesRepository,
+  PostgresTaskTemplateEdgesRepository,
+  PostgresTaskTemplatesRepository,
   PostgresTasksRepository,
+  PostgresWorkflowDefinitionsRepository,
   PostgresWorkflowsRepository,
   type Queryable,
 } from "@regisseur/store-postgres";
@@ -16,6 +19,11 @@ export function createRepositories(db: Queryable): ServerRepositories {
     workflowsRepository: new PostgresWorkflowsRepository(db),
     tasksRepository: new PostgresTasksRepository(db),
     taskEdgesRepository: new PostgresTaskEdgesRepository(db),
+    workflowDefinitionsRepository: new PostgresWorkflowDefinitionsRepository(
+      db,
+    ),
+    taskTemplatesRepository: new PostgresTaskTemplatesRepository(db),
+    taskTemplateEdgesRepository: new PostgresTaskTemplateEdgesRepository(db),
     schedulesRepository: new PostgresSchedulesRepository(db),
     runsRepository: new PostgresRunsRepository(db),
   };

@@ -29,6 +29,10 @@ function createQueueResources() {
       add: vi.fn(async () => ({ id: "job-1", data: {} }) as never),
       close: vi.fn(async () => undefined),
     },
+    scheduleTriggerQueue: {
+      add: vi.fn(async () => ({ id: "schedule-job-1", data: {} }) as never),
+      close: vi.fn(async () => undefined),
+    },
     close: vi.fn(async () => undefined),
   };
 }
@@ -36,6 +40,9 @@ function createQueueResources() {
 function createWorkerResources() {
   return {
     taskDispatchWorker: {
+      close: vi.fn(async () => undefined),
+    },
+    scheduleTriggerWorker: {
       close: vi.fn(async () => undefined),
     },
     close: vi.fn(async () => undefined),
@@ -53,6 +60,7 @@ describe("bootstrapServer", () => {
   it("creates the app and runtime resources without listening", async () => {
     const pool = createPool();
     const queueResources = createQueueResources();
+    const workerResources = createWorkerResources();
     const app = createApp();
     const registerShutdownHandlers = vi.fn(() => vi.fn());
 
@@ -61,6 +69,7 @@ describe("bootstrapServer", () => {
       factories: {
         createPool: () => pool,
         createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => workerResources),
         buildApp: vi.fn(() => app),
         registerShutdownHandlers,
       },
@@ -69,7 +78,7 @@ describe("bootstrapServer", () => {
     expect(result.app).toBe(app);
     expect(result.pool).toBe(pool);
     expect(result.queueResources).toBe(queueResources);
-    expect(result.workerResources).toBeUndefined();
+    expect(result.workerResources).toBe(workerResources);
     expect(registerShutdownHandlers).toHaveBeenCalledTimes(1);
     expect(app.listen).not.toHaveBeenCalled();
   });
@@ -102,6 +111,7 @@ describe("bootstrapServer", () => {
         createPool,
         createQueueResources,
         buildApp: vi.fn(() => createApp()),
+        createWorkerResources: vi.fn(() => createWorkerResources()),
         runMigrations,
         registerShutdownHandlers: () => vi.fn(),
       },
@@ -120,6 +130,7 @@ describe("bootstrapServer", () => {
       factories: {
         createPool,
         createQueueResources,
+        createWorkerResources: vi.fn(() => createWorkerResources()),
         buildApp: vi.fn(() => createApp()),
         runMigrations,
         registerShutdownHandlers: () => vi.fn(),
@@ -129,9 +140,59 @@ describe("bootstrapServer", () => {
     expect(runMigrations).toHaveBeenCalledTimes(1);
   });
 
+  it("replays enabled schedules during bootstrap", async () => {
+    const pool = {
+      query: vi.fn(async (text: string) => {
+        const normalized = text.replace(/\s+/g, " ").trim();
+
+        if (
+          normalized ===
+          "SELECT * FROM schedules WHERE enabled = TRUE ORDER BY created_at ASC"
+        ) {
+          return {
+            rows: [
+              {
+                schedule_id: "schedule-1",
+                type: "once",
+                cron_expression: null,
+                run_at: "2026-03-15T01:00:00.000Z",
+                timezone: null,
+                enabled: true,
+                target_type: "workflow",
+                target_id: "workflow-1",
+                created_at: "2026-03-15T00:00:00.000Z",
+                updated_at: "2026-03-15T00:00:00.000Z",
+              },
+            ],
+          } as never;
+        }
+
+        return {
+          rows: [],
+        } as never;
+      }),
+      end: vi.fn(async () => undefined),
+    };
+    const queueResources = createQueueResources();
+
+    await bootstrapServer({
+      env: createEnv(),
+      factories: {
+        createPool: () => pool,
+        createQueueResources: () => queueResources,
+        createWorkerResources: vi.fn(() => createWorkerResources()),
+        buildApp: vi.fn(() => createApp()),
+        registerShutdownHandlers: () => vi.fn(),
+      },
+    });
+
+    expect(queueResources.scheduleTriggerQueue.add).toHaveBeenCalledTimes(1);
+  });
+
   it("fails startup and closes resources when migration fails", async () => {
     const pool = createPool();
     const queueResources = createQueueResources();
+    const workerResources = createWorkerResources();
     const runMigrations = vi.fn(async () => {
       throw new Error("migration failed");
     });
@@ -144,6 +205,7 @@ describe("bootstrapServer", () => {
         factories: {
           createPool: () => pool,
           createQueueResources: () => queueResources,
+          createWorkerResources: vi.fn(() => workerResources),
           buildApp: vi.fn(() => createApp()),
           runMigrations,
           registerShutdownHandlers: () => vi.fn(),
@@ -152,6 +214,7 @@ describe("bootstrapServer", () => {
     ).rejects.toThrow("migration failed");
     expect(pool.end).toHaveBeenCalledTimes(1);
     expect(queueResources.close).toHaveBeenCalledTimes(1);
+    expect(workerResources.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes worker resources too when bootstrap fails after worker creation", async () => {

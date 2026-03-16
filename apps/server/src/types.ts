@@ -7,21 +7,22 @@ import type {
   ScheduleTargetType,
   Task,
   TaskEdge,
+  TaskTemplate,
+  TaskTemplateEdge,
   TaskStatus,
   Workflow,
+  WorkflowDefinition,
   WorkflowStatus,
 } from "@regisseur/core";
-import type {
-  DispatchEnqueuePort,
-  DispatchRequestOptions,
-  DispatchTaskResult,
-} from "@regisseur/dispatcher";
+import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 import type {
   BullMqConnectionConfig,
   QueueLike,
+  ScheduleTriggerJobPayload,
   TaskDispatchJobPayload,
   WorkerLike,
 } from "@regisseur/queue-bullmq";
+import type { ScheduleRegistrationPort } from "@regisseur/scheduler";
 import type { Queryable } from "@regisseur/store-postgres";
 
 export interface AgentsRepositoryLike {
@@ -55,6 +56,44 @@ export interface TaskEdgesRepositoryLike {
   findByFromTaskId(taskId: string): Promise<TaskEdge[]>;
   findByToTaskId(taskId: string): Promise<TaskEdge[]>;
   deleteByTaskId(taskId: string): Promise<void>;
+  deleteEdge(
+    fromTaskId: string,
+    toTaskId: string,
+    type?: TaskEdge["type"],
+  ): Promise<void>;
+}
+
+export interface WorkflowDefinitionsRepositoryLike {
+  upsert(definition: WorkflowDefinition): Promise<void>;
+  findAll(): Promise<WorkflowDefinition[]>;
+  findEnabled(): Promise<WorkflowDefinition[]>;
+  findById(workflowDefinitionId: string): Promise<WorkflowDefinition | null>;
+  deleteById(workflowDefinitionId: string): Promise<void>;
+}
+
+export interface TaskTemplatesRepositoryLike {
+  upsert(template: TaskTemplate): Promise<void>;
+  findByWorkflowDefinitionId(
+    workflowDefinitionId: string,
+  ): Promise<TaskTemplate[]>;
+  findById(taskTemplateId: string): Promise<TaskTemplate | null>;
+  deleteById(taskTemplateId: string): Promise<void>;
+}
+
+export interface TaskTemplateEdgesRepositoryLike {
+  insert(edge: TaskTemplateEdge): Promise<void>;
+  insertMany(edges: readonly TaskTemplateEdge[]): Promise<void>;
+  findAllByWorkflowDefinitionTaskTemplates(
+    taskTemplateIds: readonly string[],
+  ): Promise<TaskTemplateEdge[]>;
+  findByFromTaskTemplateId(taskTemplateId: string): Promise<TaskTemplateEdge[]>;
+  findByToTaskTemplateId(taskTemplateId: string): Promise<TaskTemplateEdge[]>;
+  deleteByTaskTemplateId(taskTemplateId: string): Promise<void>;
+  deleteEdge(
+    fromTaskTemplateId: string,
+    toTaskTemplateId: string,
+    type?: TaskTemplateEdge["type"],
+  ): Promise<void>;
 }
 
 export interface SchedulesRepositoryLike {
@@ -78,26 +117,21 @@ export interface RunsRepositoryLike {
   deleteById(runId: string): Promise<void>;
 }
 
-export interface DispatcherLike {
-  dispatch(
-    task: Task,
-    agents: readonly AgentDefinition[],
-    options?: DispatchRequestOptions,
-  ): Promise<DispatchTaskResult>;
-}
-
 export interface ServerRepositories {
   agentsRepository: AgentsRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
   tasksRepository: TasksRepositoryLike;
   taskEdgesRepository: TaskEdgesRepositoryLike;
+  workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike;
+  taskTemplatesRepository: TaskTemplatesRepositoryLike;
+  taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
   schedulesRepository: SchedulesRepositoryLike;
   runsRepository: RunsRepositoryLike;
 }
 
 export interface ServerDependencies extends ServerRepositories {
-  dispatcher: DispatcherLike;
   enqueuePort: DispatchEnqueuePort;
+  scheduleRegistrationPort?: ScheduleRegistrationPort;
   logger?: boolean | Record<string, unknown>;
 }
 
@@ -131,14 +165,20 @@ export interface TaskDispatchQueueLike extends QueueLike<TaskDispatchJobPayload>
   close(): Promise<void>;
 }
 
+export interface ScheduleTriggerQueueLike extends QueueLike<ScheduleTriggerJobPayload> {
+  close(): Promise<void>;
+}
+
 export interface QueueResources {
   connection: BullMqConnectionConfig;
   taskDispatchQueue: TaskDispatchQueueLike;
+  scheduleTriggerQueue: ScheduleTriggerQueueLike;
   close(): Promise<void>;
 }
 
 export interface WorkerResources {
   taskDispatchWorker: WorkerLike;
+  scheduleTriggerWorker: WorkerLike;
   close(): Promise<void>;
 }
 
@@ -169,7 +209,6 @@ export interface StandaloneServerComposition {
   config: BootstrapConfig;
   dependencies: ServerDependencies;
   repositories: ServerRepositories;
-  dispatcher: DispatcherLike;
   enqueuePort: DispatchEnqueuePort;
   executableAdapterRegistry: ExecutableAdapterRegistry;
   pool: PostgresPoolLike;

@@ -1,15 +1,23 @@
 import {
+  createScheduleTriggerQueue,
   createTaskDispatchQueue,
   type BullMqConnectionConfig,
 } from "@regisseur/queue-bullmq";
 
-import type { QueueResources, TaskDispatchQueueLike } from "../types.js";
+import type {
+  QueueResources,
+  ScheduleTriggerQueueLike,
+  TaskDispatchQueueLike,
+} from "../types.js";
 
 export interface CreateQueueResourcesOptions {
   redisUrl: string;
   createTaskDispatchQueueImpl?: (options: {
     connection: BullMqConnectionConfig;
   }) => TaskDispatchQueueLike;
+  createScheduleTriggerQueueImpl?: (options: {
+    connection: BullMqConnectionConfig;
+  }) => ScheduleTriggerQueueLike;
 }
 
 function decodeRedisComponent(value: string): string | undefined {
@@ -82,15 +90,24 @@ export function createQueueResources(
   const connection = createBullMqConnectionFromRedisUrl(options.redisUrl);
   const createTaskDispatchQueueImpl =
     options.createTaskDispatchQueueImpl ?? createTaskDispatchQueue;
+  const createScheduleTriggerQueueImpl =
+    options.createScheduleTriggerQueueImpl ?? createScheduleTriggerQueue;
   const taskDispatchQueue = createTaskDispatchQueueImpl({
+    connection,
+  });
+  const scheduleTriggerQueue = createScheduleTriggerQueueImpl({
     connection,
   });
 
   return {
     connection,
     taskDispatchQueue,
+    scheduleTriggerQueue,
     async close() {
-      await taskDispatchQueue.close();
+      await Promise.all([
+        taskDispatchQueue.close(),
+        scheduleTriggerQueue.close(),
+      ]);
     },
   };
 }

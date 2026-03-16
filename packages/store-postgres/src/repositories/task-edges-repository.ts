@@ -103,4 +103,20 @@ export class PostgresTaskEdgesRepository {
       [taskId],
     );
   }
+
+  async deleteEdge(
+    fromTaskId: string,
+    toTaskId: string,
+    type: TaskEdge["type"] = "depends_on",
+  ): Promise<void> {
+    await this.db.query(
+      `
+        DELETE FROM task_edges
+        WHERE from_task_id = $1
+          AND to_task_id = $2
+          AND type = $3
+      `,
+      [fromTaskId, toTaskId, type],
+    );
+  }
 }

@@ -24,6 +24,10 @@ describe("createShutdownController", () => {
           add: vi.fn(),
           close: vi.fn(async () => undefined),
         },
+        scheduleTriggerQueue: {
+          add: vi.fn(),
+          close: vi.fn(async () => undefined),
+        },
         close: vi.fn(async () => undefined),
       },
     };
@@ -56,10 +60,17 @@ describe("createShutdownController", () => {
           add: vi.fn(),
           close: vi.fn(async () => undefined),
         },
+        scheduleTriggerQueue: {
+          add: vi.fn(),
+          close: vi.fn(async () => undefined),
+        },
         close: vi.fn(async () => undefined),
       },
       workerResources: {
         taskDispatchWorker: {
+          close: vi.fn(async () => undefined),
+        },
+        scheduleTriggerWorker: {
           close: vi.fn(async () => undefined),
         },
         close: vi.fn(async () => undefined),
@@ -88,6 +99,10 @@ describe("createShutdownController", () => {
           port: 6379,
         },
         taskDispatchQueue: {
+          add: vi.fn(),
+          close: vi.fn(async () => undefined),
+        },
+        scheduleTriggerQueue: {
           add: vi.fn(),
           close: vi.fn(async () => undefined),
         },
@@ -123,10 +138,17 @@ describe("createShutdownController", () => {
           add: vi.fn(),
           close: vi.fn(async () => undefined),
         },
+        scheduleTriggerQueue: {
+          add: vi.fn(),
+          close: vi.fn(async () => undefined),
+        },
         close: vi.fn(async () => undefined),
       },
       workerResources: {
         taskDispatchWorker: {
+          close: vi.fn(async () => undefined),
+        },
+        scheduleTriggerWorker: {
           close: vi.fn(async () => undefined),
         },
         close: vi.fn(async () => undefined),

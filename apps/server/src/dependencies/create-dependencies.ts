@@ -1,18 +1,21 @@
+import { createScheduleTriggerRegistrationPort } from "@regisseur/queue-bullmq";
+
 import { createPostgresPool } from "@regisseur/store-postgres";
-import type { BullMqConnectionConfig } from "@regisseur/queue-bullmq";
 
 import { createServerDependencies } from "../plugins/repositories.js";
 import type {
   BootstrapConfig,
+  ExecutableAdapterRegistry,
   PostgresPoolLike,
   QueueResources,
   ServerDependencies,
   StandaloneServerComposition,
   WorkerResources,
 } from "../types.js";
-import { createAdapterRegistry } from "./create-adapter-registry.js";
-import { createDispatcher } from "./create-dispatcher.js";
+import type { CreateDispatchWorkerOptions } from "./create-dispatch-worker.js";
+import { createDispatchWorker } from "./create-dispatch-worker.js";
 import { createEnqueuePort } from "./create-enqueue-port.js";
+import { createExecutableAdapterRegistry } from "./create-executable-adapter-registry.js";
 import { createQueueResources } from "./create-queue-resources.js";
 import { createRepositories } from "./create-repositories.js";
 
@@ -23,8 +26,11 @@ export interface CreateStandaloneDependenciesOptions {
   workerResources?: WorkerResources;
   createPool?: (databaseUrl: string) => PostgresPoolLike;
   createQueueResources?: (config: BootstrapConfig) => QueueResources;
+  createExecutableAdapterRegistry?: (
+    config: BootstrapConfig,
+  ) => ExecutableAdapterRegistry;
   createWorkerResources?: (
-    connection: BullMqConnectionConfig,
+    options: CreateDispatchWorkerOptions,
   ) => WorkerResources;
 }
 
@@ -52,19 +58,33 @@ export function createStandaloneServerDependencies(
     createQueueResources({
       redisUrl: options.config.redisUrl,
     });
-  // workerResources is intentionally undefined by default.
-  // It is only created when a real processor factory is injected.
-  const workerResources =
-    options.workerResources ??
-    options.createWorkerResources?.(queueResources.connection);
   const enqueuePort = createEnqueuePort({
     queue: queueResources.taskDispatchQueue,
   });
-  const dispatcher = createDispatcher(enqueuePort);
-  const adapterRegistry = createAdapterRegistry(options.config);
+  const scheduleRegistrationPort = createScheduleTriggerRegistrationPort(
+    queueResources.scheduleTriggerQueue,
+  );
+  const executableAdapterRegistry =
+    options.createExecutableAdapterRegistry?.(options.config) ??
+    createExecutableAdapterRegistry(options.config);
+  const workerResources =
+    options.workerResources ??
+    options.createWorkerResources?.({
+      connection: queueResources.connection,
+      repositories,
+      executableAdapterRegistry,
+      enqueuePort,
+    }) ??
+    createDispatchWorker({
+      connection: queueResources.connection,
+      repositories,
+      executableAdapterRegistry,
+      enqueuePort,
+    });
   const dependencies = createServerDependencies(
     repositories,
-    dispatcher,
+    enqueuePort,
+    scheduleRegistrationPort,
     createLoggerConfig(options.config),
   );
 
@@ -72,9 +92,8 @@ export function createStandaloneServerDependencies(
     config: options.config,
     dependencies,
     repositories,
-    dispatcher,
     enqueuePort,
-    adapterRegistry,
+    executableAdapterRegistry,
     pool,
     queueResources,
     workerResources,

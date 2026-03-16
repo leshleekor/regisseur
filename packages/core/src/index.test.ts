@@ -7,6 +7,7 @@ import {
   SCHEDULE_TARGET_TYPES,
   SCHEDULE_TYPES,
   TASK_EDGE_TYPES,
+  TASK_TEMPLATE_EDGE_TYPES,
   TASK_STATUSES,
   TERMINAL_RUN_STATUSES,
   TERMINAL_TASK_STATUSES,
@@ -23,7 +24,10 @@ import type {
   Schedule,
   Task,
   TaskEdge,
+  TaskTemplate,
+  TaskTemplateEdge,
   Workflow,
+  WorkflowDefinition,
 } from "./index.js";
 
 describe("core domain exports", () => {
@@ -50,6 +54,18 @@ describe("core domain exports", () => {
       },
     };
 
+    const workflowDefinition: WorkflowDefinition = {
+      workflowDefinitionId: "workflow-definition-1",
+      name: "Reusable Feature Delivery Workflow",
+      description: "Reusable definition for feature delivery",
+      enabled: true,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:05:00.000Z",
+      metadata: {
+        team: "platform",
+      },
+    };
+
     const task: Task = {
       taskId: "task-1",
       workflowId: workflow.workflowId,
@@ -68,9 +84,31 @@ describe("core domain exports", () => {
       },
     };
 
+    const taskTemplate: TaskTemplate = {
+      taskTemplateId: "task-template-1",
+      workflowDefinitionId: workflowDefinition.workflowDefinitionId,
+      title: "Analyze PR changes",
+      payload: {
+        prNumber: 42,
+      },
+      retryCount: 0,
+      concurrencyKey: "repo:regisseur",
+      createdAt: "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:05:00.000Z",
+      metadata: {
+        priority: "high",
+      },
+    };
+
     const edge: TaskEdge = {
       fromTaskId: "task-0",
       toTaskId: task.taskId,
+      type: "depends_on",
+    };
+
+    const templateEdge: TaskTemplateEdge = {
+      fromTaskTemplateId: "task-template-0",
+      toTaskTemplateId: taskTemplate.taskTemplateId,
       type: "depends_on",
     };
 
@@ -96,8 +134,11 @@ describe("core domain exports", () => {
     };
 
     expect(agent.runtimeType).toBe("cli");
+    expect(workflowDefinition.enabled).toBe(true);
     expect(task.status).toBe("ready");
     expect(edge.type).toBe("depends_on");
+    expect(taskTemplate.retryCount).toBe(0);
+    expect(templateEdge.type).toBe("depends_on");
     expect(schedule.targetType).toBe("workflow");
     expect(run.status).toBe("queued");
   });
@@ -168,6 +209,7 @@ describe("status catalogs", () => {
       "cancelled",
     ]);
     expect(TASK_EDGE_TYPES).toEqual(["depends_on"]);
+    expect(TASK_TEMPLATE_EDGE_TYPES).toEqual(["depends_on"]);
     expect(SCHEDULE_TYPES).toEqual(["once", "cron"]);
     expect(SCHEDULE_TARGET_TYPES).toEqual(["workflow", "task"]);
     expect(WORKFLOW_STATUSES).toEqual([

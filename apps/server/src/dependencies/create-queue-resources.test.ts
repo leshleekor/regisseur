@@ -37,15 +37,21 @@ describe("createBullMqConnectionFromRedisUrl", () => {
 
 describe("createQueueResources", () => {
   it("creates closeable queue resources from the supplied queue factory", async () => {
-    const close = vi.fn(async () => undefined);
-    const queue = {
+    const closeTaskQueue = vi.fn(async () => undefined);
+    const closeScheduleQueue = vi.fn(async () => undefined);
+    const taskQueue = {
       add: vi.fn(),
-      close,
+      close: closeTaskQueue,
+    };
+    const scheduleQueue = {
+      add: vi.fn(),
+      close: closeScheduleQueue,
     };
 
     const resources = createQueueResources({
       redisUrl: "redis://localhost:6379/1",
-      createTaskDispatchQueueImpl: vi.fn(() => queue),
+      createTaskDispatchQueueImpl: vi.fn(() => taskQueue),
+      createScheduleTriggerQueueImpl: vi.fn(() => scheduleQueue),
     });
 
     expect(resources.connection).toEqual({
@@ -53,10 +59,12 @@ describe("createQueueResources", () => {
       port: 6379,
       db: 1,
     });
-    expect(resources.taskDispatchQueue).toBe(queue);
+    expect(resources.taskDispatchQueue).toBe(taskQueue);
+    expect(resources.scheduleTriggerQueue).toBe(scheduleQueue);
 
     await resources.close();
 
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(closeTaskQueue).toHaveBeenCalledTimes(1);
+    expect(closeScheduleQueue).toHaveBeenCalledTimes(1);
   });
 });

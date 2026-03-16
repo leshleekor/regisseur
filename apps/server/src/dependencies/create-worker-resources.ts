@@ -1,6 +1,8 @@
 import {
+  createScheduleTriggerWorker,
   createTaskDispatchWorker,
   type BullMqConnectionConfig,
+  type ScheduleTriggerJobPayload,
   type TaskDispatchJobPayload,
   type WorkerLike,
 } from "@regisseur/queue-bullmq";
@@ -11,6 +13,10 @@ export type TaskDispatchProcessor = (
   payload: TaskDispatchJobPayload,
 ) => Promise<void>;
 
+export type ScheduleTriggerProcessor = (
+  payload: ScheduleTriggerJobPayload,
+) => Promise<void>;
+
 export interface CreateWorkerResourcesOptions {
   connection: BullMqConnectionConfig;
   // NOTE: processor is required. No noop default is provided intentionally.
@@ -19,8 +25,15 @@ export interface CreateWorkerResourcesOptions {
   // This function is called in the execution lifecycle work when a real
   // processor is available.
   taskDispatchProcessor: TaskDispatchProcessor;
+  scheduleTriggerProcessor: ScheduleTriggerProcessor;
   createTaskDispatchWorkerImpl?: (
     processor: (payload: TaskDispatchJobPayload) => Promise<void>,
+    options: {
+      connection: BullMqConnectionConfig;
+    },
+  ) => WorkerLike;
+  createScheduleTriggerWorkerImpl?: (
+    processor: (payload: ScheduleTriggerJobPayload) => Promise<void>,
     options: {
       connection: BullMqConnectionConfig;
     },
@@ -32,6 +45,8 @@ export function createWorkerResources(
 ): WorkerResources {
   const createTaskDispatchWorkerImpl =
     options.createTaskDispatchWorkerImpl ?? createTaskDispatchWorker;
+  const createScheduleTriggerWorkerImpl =
+    options.createScheduleTriggerWorkerImpl ?? createScheduleTriggerWorker;
   const taskDispatchWorker = createTaskDispatchWorkerImpl(
     async (payload) => {
       await options.taskDispatchProcessor(payload);
@@ -40,11 +55,23 @@ export function createWorkerResources(
       connection: options.connection,
     },
   );
+  const scheduleTriggerWorker = createScheduleTriggerWorkerImpl(
+    async (payload) => {
+      await options.scheduleTriggerProcessor(payload);
+    },
+    {
+      connection: options.connection,
+    },
+  );
 
   return {
     taskDispatchWorker,
+    scheduleTriggerWorker,
     async close() {
-      await taskDispatchWorker.close();
+      await Promise.all([
+        taskDispatchWorker.close(),
+        scheduleTriggerWorker.close(),
+      ]);
     },
   };
 }

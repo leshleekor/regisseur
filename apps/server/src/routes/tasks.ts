@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { badGateway, conflict, notFound } from "../errors/http-error.js";
+import { selectPersistAndEnqueue } from "../execution/dispatch-persistence.js";
 import {
   parseTaskBody,
   parseTaskDispatchBody,
@@ -62,30 +63,38 @@ export function registerTaskRoutes(
       throw notFound(`Task ${taskId} not found`);
     }
 
+    if (task.status !== "ready") {
+      throw conflict(
+        "TASK_NOT_READY",
+        `Task ${taskId} is not ready for dispatch (status: ${task.status})`,
+      );
+    }
+
     const agents = await deps.agentsRepository.findAll();
-    const result = await deps.dispatcher.dispatch(task, agents, {
-      triggerSource: dispatchBody.triggerSource,
-    });
+    const result = await selectPersistAndEnqueue(
+      task,
+      agents,
+      {
+        tasksRepository: deps.tasksRepository,
+        workflowsRepository: deps.workflowsRepository,
+      },
+      deps.enqueuePort,
+      {
+        // NOTE: The selectPersistAndEnqueue sequence is:
+        // save task -> update workflow -> enqueue.
+        // Without a transaction/outbox, two failure windows remain:
+        //
+        // (1) workflow update fails: task=queued, workflow=old state, no job.
+        // (2) enqueue fails: task=queued, workflow=running, no job.
+        //
+        // In both cases, manual API redispatch is not a recovery path because
+        // this route only accepts ready tasks. A future reconciler/outbox layer
+        // is required to close those gaps.
+        triggerSource: dispatchBody.triggerSource,
+      },
+    );
 
     if (result.ok) {
-      // NOTE: agentId is not included in the queue payload
-      // (TaskDispatchJobPayload). task.assigneeAgentId is the only way for the
-      // execution worker to recover which agent was selected for this task.
-      //
-      // NOTE: At this point the job has already been enqueued. If the task
-      // state update below fails, the job will remain in the queue with no
-      // corresponding "queued" state in the database. This inconsistency is
-      // intentional at this stage and will be addressed when a transactional
-      // dispatch service is introduced in the execution lifecycle work.
-      // Duplicate enqueue on client retry is prevented by the temporary
-      // jobId = taskId policy at the enqueue port layer.
-      await deps.tasksRepository.upsert({
-        ...task,
-        assigneeAgentId: result.agentId,
-        status: "queued",
-        updatedAt: new Date().toISOString(),
-      });
-
       return result;
     }
 

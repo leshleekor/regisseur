@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentDefinition } from "@regisseur/core";
-import type { DispatcherLike } from "../types.js";
 
 import { buildApp } from "../app.js";
 import { createServerDependencies } from "../plugins/repositories.js";
@@ -16,14 +15,11 @@ function createQueryResult<T>(rows: T[]) {
   } as never;
 }
 
-function createDispatcherStub(): DispatcherLike {
+function createEnqueuePortStub() {
   return {
-    dispatch: vi.fn(async () => ({
-      ok: false,
-      taskId: "task-1",
-      workflowId: "workflow-1",
-      reason: "TASK_NOT_READY",
-      message: "not used",
+    enqueueTaskDispatch: vi.fn(async () => ({
+      ok: true as const,
+      jobId: "job-1",
     })),
   };
 }
@@ -46,6 +42,15 @@ describe("createRepositories", () => {
     expect(typeof repositories.taskEdgesRepository.findByFromTaskId).toBe(
       "function",
     );
+    expect(typeof repositories.workflowDefinitionsRepository.findAll).toBe(
+      "function",
+    );
+    expect(
+      typeof repositories.taskTemplatesRepository.findByWorkflowDefinitionId,
+    ).toBe("function");
+    expect(
+      typeof repositories.taskTemplateEdgesRepository.findByFromTaskTemplateId,
+    ).toBe("function");
     expect(typeof repositories.schedulesRepository.findAll).toBe("function");
     expect(typeof repositories.runsRepository.findByTaskId).toBe("function");
   });
@@ -57,7 +62,7 @@ describe("createRepositories", () => {
 
     const repositories = createRepositories(db);
     const app = buildApp(
-      createServerDependencies(repositories, createDispatcherStub()),
+      createServerDependencies(repositories, createEnqueuePortStub()),
     );
 
     await expect(
@@ -75,7 +80,7 @@ describe("createRepositories", () => {
     };
     const repositories = createRepositories(db);
     const app = buildApp(
-      createServerDependencies(repositories, createDispatcherStub()),
+      createServerDependencies(repositories, createEnqueuePortStub()),
     );
     const agent: AgentDefinition = {
       agentId: "agent-1",

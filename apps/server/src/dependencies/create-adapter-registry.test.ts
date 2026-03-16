@@ -4,37 +4,34 @@ import { createAdapterRegistry } from "./create-adapter-registry.js";
 
 describe("createAdapterRegistry", () => {
   it("includes enabled adapters in the registry", () => {
-    expect(
-      createAdapterRegistry({
-        enableHttpAdapter: true,
-        enableCliAdapter: true,
-        enableOpenClawAdapter: true,
-      }),
-    ).toEqual({
-      http: {
-        runtimeType: "http",
-      },
-      cli: {
-        runtimeType: "cli",
-      },
-      openclaw: {
-        runtimeType: "openclaw",
-      },
+    const registry = createAdapterRegistry({
+      enableHttpAdapter: true,
+      enableCliAdapter: true,
+      enableOpenClawAdapter: true,
     });
+
+    expect(registry.http?.runtimeType).toBe("http");
+    expect(typeof registry.http?.execute).toBe("function");
+    expect(registry.cli?.runtimeType).toBe("cli");
+    expect(typeof registry.cli?.execute).toBe("function");
+    expect(registry.openclaw?.runtimeType).toBe("openclaw");
+    expect(typeof registry.openclaw?.execute).toBe("function");
   });
 
   it("omits disabled adapters from the registry", () => {
-    expect(
-      createAdapterRegistry({
-        enableHttpAdapter: false,
-        enableCliAdapter: true,
-        enableOpenClawAdapter: false,
-      }),
-    ).toEqual({
+    const registry = createAdapterRegistry({
+      enableHttpAdapter: false,
+      enableCliAdapter: true,
+      enableOpenClawAdapter: false,
+    });
+
+    expect(registry).toMatchObject({
       cli: {
         runtimeType: "cli",
       },
     });
+    expect(registry.http).toBeUndefined();
+    expect(registry.openclaw).toBeUndefined();
   });
 
   it("returns an empty registry when all adapters are disabled", () => {
