@@ -93,6 +93,9 @@ importers:
 
   packages/queue-bullmq:
     dependencies:
+      '@regisseur/core':
+        specifier: workspace:*
+        version: link:../core
       bullmq:
         specifier: ^5.56.0
         version: 5.71.0

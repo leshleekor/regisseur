@@ -1,4 +1,4 @@
-import type { IsoTimestamp } from "./shared.js";
+import type { DispatchTriggerSource, IsoTimestamp } from "./shared.js";
 
 export const WORKFLOW_STATUSES = [
   "pending",
@@ -28,6 +28,14 @@ export interface Workflow {
   createdAt: IsoTimestamp;
   /** Last update timestamp for workflow state or metadata changes. */
   updatedAt: IsoTimestamp;
+  /** Optional provenance back-reference to the definition this run came from. */
+  workflowDefinitionId?: string;
+  /** Trigger source that created this runtime workflow instance. */
+  triggerSource?: DispatchTriggerSource;
+  /** Optional schedule id that created this runtime workflow instance. */
+  triggeredByScheduleId?: string;
+  /** Optional workflow execution start timestamp. */
+  startedAt?: IsoTimestamp;
   /** Optional contextual metadata such as initiator, tags, or source info. */
   metadata?: Record<string, unknown>;
 }

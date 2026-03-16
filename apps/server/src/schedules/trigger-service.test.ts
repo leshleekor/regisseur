@@ -4,7 +4,10 @@ import type {
   Schedule,
   Task,
   TaskEdge,
+  TaskTemplate,
+  TaskTemplateEdge,
   Workflow,
+  WorkflowDefinition,
 } from "@regisseur/core";
 
 import { handleScheduleTrigger } from "./trigger-service.js";
@@ -38,6 +41,20 @@ function createWorkflow(
   };
 }
 
+function createWorkflowDefinition(
+  workflowDefinitionId: string,
+  overrides: Partial<WorkflowDefinition> = {},
+): WorkflowDefinition {
+  return {
+    workflowDefinitionId,
+    name: workflowDefinitionId,
+    enabled: true,
+    createdAt: "2026-03-15T00:00:00.000Z",
+    updatedAt: "2026-03-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function createTask(
   taskId: string,
   workflowId: string,
@@ -49,6 +66,23 @@ function createTask(
     title: taskId,
     payload: {},
     status: "pending",
+    retryCount: 0,
+    createdAt: "2026-03-15T00:00:00.000Z",
+    updatedAt: "2026-03-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createTaskTemplate(
+  taskTemplateId: string,
+  workflowDefinitionId: string,
+  overrides: Partial<TaskTemplate> = {},
+): TaskTemplate {
+  return {
+    taskTemplateId,
+    workflowDefinitionId,
+    title: taskTemplateId,
+    payload: {},
     retryCount: 0,
     createdAt: "2026-03-15T00:00:00.000Z",
     updatedAt: "2026-03-15T00:00:00.000Z",
@@ -73,10 +107,13 @@ function createSchedule(
   };
 }
 
-function createEdge(fromTaskId: string, toTaskId: string): TaskEdge {
+function createTaskTemplateEdge(
+  fromTaskTemplateId: string,
+  toTaskTemplateId: string,
+): TaskTemplateEdge {
   return {
-    fromTaskId,
-    toTaskId,
+    fromTaskTemplateId,
+    toTaskTemplateId,
     type: "depends_on",
   };
 }
@@ -85,6 +122,9 @@ function createRepositories(options: {
   schedules?: readonly Schedule[];
   tasks?: readonly Task[];
   workflows?: readonly Workflow[];
+  workflowDefinitions?: readonly WorkflowDefinition[];
+  taskTemplates?: readonly TaskTemplate[];
+  taskTemplateEdges?: readonly TaskTemplateEdge[];
   agents?: readonly AgentDefinition[];
   edges?: readonly TaskEdge[];
   failScheduleDisable?: boolean;
@@ -104,6 +144,19 @@ function createRepositories(options: {
       workflow,
     ]),
   );
+  const workflowDefinitions = new Map(
+    (options.workflowDefinitions ?? []).map((workflowDefinition) => [
+      workflowDefinition.workflowDefinitionId,
+      workflowDefinition,
+    ]),
+  );
+  const taskTemplates = new Map(
+    (options.taskTemplates ?? []).map((taskTemplate) => [
+      taskTemplate.taskTemplateId,
+      taskTemplate,
+    ]),
+  );
+  const taskTemplateEdges = [...(options.taskTemplateEdges ?? [])];
   const agents = new Map(
     (options.agents ?? []).map((agent) => [agent.agentId, agent]),
   );
@@ -114,6 +167,10 @@ function createRepositories(options: {
       schedules,
       tasks,
       workflows,
+      taskEdges: edges,
+      workflowDefinitions,
+      taskTemplates,
+      taskTemplateEdges,
     },
     repositories: {
       agentsRepository: {
@@ -155,8 +212,12 @@ function createRepositories(options: {
         deleteById: vi.fn(async () => undefined),
       },
       taskEdgesRepository: {
-        insert: vi.fn(async () => undefined),
-        insertMany: vi.fn(async () => undefined),
+        insert: vi.fn(async (taskEdge: TaskEdge) => {
+          edges.push(taskEdge);
+        }),
+        insertMany: vi.fn(async (nextTaskEdges: readonly TaskEdge[]) => {
+          edges.push(...nextTaskEdges);
+        }),
         findAllByWorkflowTasks: vi.fn(async () => edges),
         findByFromTaskId: vi.fn(async () => []),
         findByToTaskId: vi.fn(async () => []),
@@ -173,6 +234,67 @@ function createRepositories(options: {
           async (workflowId: string) => workflows.get(workflowId) ?? null,
         ),
         deleteById: vi.fn(async () => undefined),
+      },
+      workflowDefinitionsRepository: {
+        upsert: vi.fn(async (workflowDefinition: WorkflowDefinition) => {
+          workflowDefinitions.set(
+            workflowDefinition.workflowDefinitionId,
+            workflowDefinition,
+          );
+        }),
+        findAll: vi.fn(async () => Array.from(workflowDefinitions.values())),
+        findEnabled: vi.fn(async () =>
+          Array.from(workflowDefinitions.values()).filter(
+            (workflowDefinition) => workflowDefinition.enabled,
+          ),
+        ),
+        findById: vi.fn(
+          async (workflowDefinitionId: string) =>
+            workflowDefinitions.get(workflowDefinitionId) ?? null,
+        ),
+        deleteById: vi.fn(async () => undefined),
+      },
+      taskTemplatesRepository: {
+        upsert: vi.fn(async (taskTemplate: TaskTemplate) => {
+          taskTemplates.set(taskTemplate.taskTemplateId, taskTemplate);
+        }),
+        findByWorkflowDefinitionId: vi.fn(
+          async (workflowDefinitionId: string) =>
+            Array.from(taskTemplates.values()).filter(
+              (taskTemplate) =>
+                taskTemplate.workflowDefinitionId === workflowDefinitionId,
+            ),
+        ),
+        findById: vi.fn(
+          async (taskTemplateId: string) =>
+            taskTemplates.get(taskTemplateId) ?? null,
+        ),
+        deleteById: vi.fn(async () => undefined),
+      },
+      taskTemplateEdgesRepository: {
+        insert: vi.fn(async (taskTemplateEdge: TaskTemplateEdge) => {
+          taskTemplateEdges.push(taskTemplateEdge);
+        }),
+        insertMany: vi.fn(
+          async (nextTaskTemplateEdges: readonly TaskTemplateEdge[]) => {
+            taskTemplateEdges.push(...nextTaskTemplateEdges);
+          },
+        ),
+        findAllByWorkflowDefinitionTaskTemplates: vi.fn(
+          async (taskTemplateIds: readonly string[]) => {
+            const taskTemplateIdSet = new Set(taskTemplateIds);
+
+            return taskTemplateEdges.filter(
+              (taskTemplateEdge) =>
+                taskTemplateIdSet.has(taskTemplateEdge.fromTaskTemplateId) &&
+                taskTemplateIdSet.has(taskTemplateEdge.toTaskTemplateId),
+            );
+          },
+        ),
+        findByFromTaskTemplateId: vi.fn(async () => []),
+        findByToTaskTemplateId: vi.fn(async () => []),
+        deleteByTaskTemplateId: vi.fn(async () => undefined),
+        deleteEdge: vi.fn(async () => undefined),
       },
     },
   };
@@ -370,10 +492,10 @@ describe("handleScheduleTrigger", () => {
     },
   );
 
-  it("treats missing workflows as a no-op", async () => {
+  it("treats missing workflow definitions as a no-op", async () => {
     const schedule = createSchedule("schedule-1", {
       targetType: "workflow",
-      targetId: "workflow-1",
+      targetId: "workflow-definition-1",
     });
     const { repositories } = createRepositories({
       schedules: [schedule],
@@ -385,7 +507,7 @@ describe("handleScheduleTrigger", () => {
         {
           scheduleId: "schedule-1",
           targetType: "workflow",
-          targetId: "workflow-1",
+          targetId: "workflow-definition-1",
           triggeredAt: "2026-03-15T00:00:00.000Z",
         },
         repositories,
@@ -395,20 +517,25 @@ describe("handleScheduleTrigger", () => {
       scheduleId: "schedule-1",
       enqueuedTaskIds: [],
       skipped: true,
-      skippedReason: "WORKFLOW_NOT_FOUND",
+      skippedReason: "DEFINITION_NOT_FOUND",
     });
   });
 
-  it("skips failed workflows and does not enqueue anything", async () => {
+  it("treats disabled workflow definitions as a no-op", async () => {
     const schedule = createSchedule("schedule-1", {
       targetType: "workflow",
-      targetId: "workflow-1",
+      targetId: "workflow-definition-1",
       type: "cron",
     });
-    const workflow = createWorkflow("workflow-1", { status: "failed" });
+    const workflowDefinition = createWorkflowDefinition(
+      "workflow-definition-1",
+      {
+        enabled: false,
+      },
+    );
     const { repositories } = createRepositories({
       schedules: [schedule],
-      workflows: [workflow],
+      workflowDefinitions: [workflowDefinition],
     });
     const { port, requests } = createEnqueuePort();
 
@@ -416,41 +543,47 @@ describe("handleScheduleTrigger", () => {
       {
         scheduleId: "schedule-1",
         targetType: "workflow",
-        targetId: "workflow-1",
+        targetId: "workflow-definition-1",
         triggeredAt: "2026-03-15T00:00:00.000Z",
       },
       repositories,
       port,
     );
 
-    expect(result.skippedReason).toBe("WORKFLOW_FAILED");
+    expect(result.skippedReason).toBe("DEFINITION_DISABLED");
     expect(requests).toEqual([]);
   });
 
-  it("enqueues only ready root workflow kickoff tasks and includes already-ready roots", async () => {
+  it("materializes a fresh runtime workflow from a workflow definition target", async () => {
     const schedule = createSchedule("schedule-1", {
       targetType: "workflow",
-      targetId: "workflow-1",
+      targetId: "workflow-definition-1",
     });
-    const workflow = createWorkflow("workflow-1");
-    const rootReady = createTask("task-ready", workflow.workflowId, {
-      status: "ready",
-    });
-    const rootBlocked = createTask("task-blocked", workflow.workflowId, {
-      status: "blocked",
-    });
-    const nonRoot = createTask("task-child", workflow.workflowId, {
-      status: "pending",
-    });
-    const runningRoot = createTask("task-running", workflow.workflowId, {
-      status: "running",
-    });
-    const { repositories } = createRepositories({
+    const workflowDefinition = createWorkflowDefinition(
+      "workflow-definition-1",
+    );
+    const rootTemplate = createTaskTemplate(
+      "task-template-root",
+      workflowDefinition.workflowDefinitionId,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const childTemplate = createTaskTemplate(
+      "task-template-child",
+      workflowDefinition.workflowDefinitionId,
+    );
+    const { repositories, state } = createRepositories({
       schedules: [schedule],
-      workflows: [workflow],
-      tasks: [rootReady, rootBlocked, nonRoot, runningRoot],
+      workflowDefinitions: [workflowDefinition],
+      taskTemplates: [rootTemplate, childTemplate],
+      taskTemplateEdges: [
+        createTaskTemplateEdge(
+          rootTemplate.taskTemplateId,
+          childTemplate.taskTemplateId,
+        ),
+      ],
       agents: [createAgent("agent-1")],
-      edges: [createEdge("task-ready", "task-child")],
     });
     const { port, requests } = createEnqueuePort();
 
@@ -458,7 +591,7 @@ describe("handleScheduleTrigger", () => {
       {
         scheduleId: "schedule-1",
         targetType: "workflow",
-        targetId: "workflow-1",
+        targetId: "workflow-definition-1",
         triggeredAt: "2026-03-15T00:00:00.000Z",
       },
       repositories,
@@ -467,13 +600,93 @@ describe("handleScheduleTrigger", () => {
 
     expect(result).toEqual({
       scheduleId: "schedule-1",
-      enqueuedTaskIds: ["task-ready", "task-blocked"],
+      enqueuedTaskIds: expect.arrayContaining([expect.any(String)]),
       skipped: false,
     });
-    expect(requests.map((request) => request.taskId)).toEqual([
-      "task-ready",
-      "task-blocked",
-    ]);
+    expect(requests).toHaveLength(1);
+    expect(state.workflows.size).toBe(1);
+    expect(state.tasks.size).toBe(2);
+    expect(state.taskEdges).toHaveLength(1);
+    expect(Array.from(state.workflows.values())[0]).toMatchObject({
+      workflowDefinitionId: workflowDefinition.workflowDefinitionId,
+      triggerSource: "schedule",
+      triggeredByScheduleId: "schedule-1",
+      status: "running",
+    });
+    expect(Array.from(state.tasks.values())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskTemplateId: rootTemplate.taskTemplateId,
+          status: "queued",
+        }),
+        expect.objectContaining({
+          taskTemplateId: childTemplate.taskTemplateId,
+          status: "blocked",
+        }),
+      ]),
+    );
+  });
+
+  it("creates a fresh runtime workflow every time a workflow definition schedule fires", async () => {
+    const schedule = createSchedule("schedule-1", {
+      type: "cron",
+      runAt: undefined,
+      cronExpression: "0 * * * *",
+      targetType: "workflow",
+      targetId: "workflow-definition-1",
+    });
+    const workflowDefinition = createWorkflowDefinition(
+      "workflow-definition-1",
+    );
+    const rootTemplate = createTaskTemplate(
+      "task-template-root",
+      workflowDefinition.workflowDefinitionId,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const { repositories, state } = createRepositories({
+      schedules: [schedule],
+      workflowDefinitions: [workflowDefinition],
+      taskTemplates: [rootTemplate],
+      agents: [createAgent("agent-1")],
+    });
+    const { port } = createEnqueuePort();
+
+    const firstResult = await handleScheduleTrigger(
+      {
+        scheduleId: "schedule-1",
+        targetType: "workflow",
+        targetId: "workflow-definition-1",
+        triggeredAt: "2026-03-15T00:00:00.000Z",
+      },
+      repositories,
+      port,
+    );
+    const firstWorkflowId = Array.from(state.workflows.keys())[0];
+    const firstTaskIds = Array.from(state.tasks.keys());
+
+    const secondResult = await handleScheduleTrigger(
+      {
+        scheduleId: "schedule-1",
+        targetType: "workflow",
+        targetId: "workflow-definition-1",
+        triggeredAt: "2026-03-15T01:00:00.000Z",
+      },
+      repositories,
+      port,
+    );
+    const workflowIds = Array.from(state.workflows.keys());
+    const taskIds = Array.from(state.tasks.keys());
+
+    expect(firstResult.skipped).toBe(false);
+    expect(secondResult.skipped).toBe(false);
+    expect(workflowIds).toHaveLength(2);
+    expect(workflowIds[0]).toBe(firstWorkflowId);
+    expect(workflowIds[1]).not.toBe(firstWorkflowId);
+    expect(taskIds).toHaveLength(2);
+    expect(taskIds[0]).toBe(firstTaskIds[0]);
+    expect(taskIds[1]).not.toBe(firstTaskIds[0]);
   });
 
   it("swallows once disable persistence failures and still completes the worker path", async () => {

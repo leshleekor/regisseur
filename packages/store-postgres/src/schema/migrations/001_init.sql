@@ -11,15 +11,6 @@ CREATE TABLE IF NOT EXISTS agents (
   CONSTRAINT agents_config_is_object CHECK (jsonb_typeof(config) = 'object')
 );
 
-CREATE TABLE IF NOT EXISTS workflows (
-  workflow_id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  status TEXT NOT NULL,
-  metadata JSONB NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS workflow_definitions (
   workflow_definition_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -30,25 +21,18 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS tasks (
-  task_id TEXT PRIMARY KEY,
-  workflow_id TEXT NOT NULL REFERENCES workflows(workflow_id),
-  title TEXT NOT NULL,
-  payload JSONB NOT NULL,
+CREATE TABLE IF NOT EXISTS workflows (
+  workflow_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
   status TEXT NOT NULL,
-  assignee_agent_id TEXT NULL REFERENCES agents(agent_id),
-  retry_count INTEGER NOT NULL,
-  concurrency_key TEXT NULL,
+  workflow_definition_id TEXT NULL
+    REFERENCES workflow_definitions(workflow_definition_id),
+  trigger_source TEXT NULL,
+  triggered_by_schedule_id TEXT NULL,
+  started_at TIMESTAMPTZ NULL,
   metadata JSONB NULL,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS task_edges (
-  from_task_id TEXT NOT NULL REFERENCES tasks(task_id),
-  to_task_id TEXT NOT NULL REFERENCES tasks(task_id),
-  type TEXT NOT NULL,
-  PRIMARY KEY (from_task_id, to_task_id, type)
 );
 
 CREATE TABLE IF NOT EXISTS task_templates (
@@ -63,6 +47,28 @@ CREATE TABLE IF NOT EXISTS task_templates (
   metadata JSONB NULL,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+  task_id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflows(workflow_id),
+  title TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  status TEXT NOT NULL,
+  assignee_agent_id TEXT NULL REFERENCES agents(agent_id),
+  retry_count INTEGER NOT NULL,
+  task_template_id TEXT NULL REFERENCES task_templates(task_template_id),
+  concurrency_key TEXT NULL,
+  metadata JSONB NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_edges (
+  from_task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  to_task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  type TEXT NOT NULL,
+  PRIMARY KEY (from_task_id, to_task_id, type)
 );
 
 CREATE TABLE IF NOT EXISTS task_template_edges (
@@ -111,6 +117,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_agent_id
   ON tasks (assignee_agent_id);
 
+CREATE INDEX IF NOT EXISTS idx_tasks_task_template_id
+  ON tasks (task_template_id);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_key
   ON tasks (concurrency_key);
 
@@ -122,6 +131,9 @@ CREATE INDEX IF NOT EXISTS idx_task_edges_from_task_id
 
 CREATE INDEX IF NOT EXISTS idx_workflow_definitions_enabled
   ON workflow_definitions (enabled);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_workflow_definition_id
+  ON workflows (workflow_definition_id);
 
 CREATE INDEX IF NOT EXISTS idx_task_templates_workflow_definition_id
   ON task_templates (workflow_definition_id);

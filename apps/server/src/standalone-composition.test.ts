@@ -85,13 +85,31 @@ function createInMemoryPool() {
         sql.includes("INSERT INTO workflows") &&
         sql.includes("ON CONFLICT")
       ) {
-        const [workflowId, name, status, metadata, createdAt, updatedAt] =
-          values;
+        const [
+          workflowId,
+          name,
+          status,
+          workflowDefinitionId,
+          triggerSource,
+          triggeredByScheduleId,
+          startedAt,
+          metadata,
+          createdAt,
+          updatedAt,
+        ] = values;
 
         workflows.set(String(workflowId), {
           workflow_id: String(workflowId),
           name: String(name),
           status: String(status),
+          workflow_definition_id:
+            workflowDefinitionId === null ? null : String(workflowDefinitionId),
+          trigger_source: triggerSource === null ? null : String(triggerSource),
+          triggered_by_schedule_id:
+            triggeredByScheduleId === null
+              ? null
+              : String(triggeredByScheduleId),
+          started_at: startedAt === null ? null : String(startedAt),
           metadata: metadata === null ? null : JSON.parse(String(metadata)),
           created_at: String(createdAt),
           updated_at: String(updatedAt),
@@ -143,6 +161,7 @@ function createInMemoryPool() {
           status,
           assigneeAgentId,
           retryCount,
+          taskTemplateId,
           concurrencyKey,
           metadata,
           createdAt,
@@ -158,6 +177,8 @@ function createInMemoryPool() {
           assignee_agent_id:
             assigneeAgentId === null ? null : String(assigneeAgentId),
           retry_count: Number(retryCount),
+          task_template_id:
+            taskTemplateId === null ? null : String(taskTemplateId),
           concurrency_key:
             concurrencyKey === null ? null : String(concurrencyKey),
           metadata: metadata === null ? null : JSON.parse(String(metadata)),
@@ -365,6 +386,10 @@ describe("standalone runtime composition", () => {
       workflow_id: "workflow-1",
       name: "Workflow One",
       status: "pending",
+      workflow_definition_id: null,
+      trigger_source: null,
+      triggered_by_schedule_id: null,
+      started_at: null,
       metadata: null,
       created_at: "2026-03-15T00:00:00.000Z",
       updated_at: "2026-03-15T00:00:00.000Z",
@@ -377,6 +402,7 @@ describe("standalone runtime composition", () => {
       status: "ready",
       assignee_agent_id: null,
       retry_count: 0,
+      task_template_id: null,
       concurrency_key: null,
       metadata: null,
       created_at: "2026-03-15T00:00:00.000Z",

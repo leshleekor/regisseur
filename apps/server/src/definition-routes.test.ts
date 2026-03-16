@@ -29,6 +29,21 @@ function createWorkflowDefinition(
   };
 }
 
+function createAgent(
+  agentId: string,
+  overrides: Partial<AgentDefinition> = {},
+): AgentDefinition {
+  return {
+    agentId,
+    name: agentId,
+    runtimeType: "cli",
+    capabilities: [],
+    enabled: true,
+    config: {},
+    ...overrides,
+  };
+}
+
 function createTaskTemplate(
   taskTemplateId: string,
   workflowDefinitionId: string,
@@ -306,6 +321,9 @@ function createDependencies() {
     state: {
       workflowDefinitions,
       taskTemplates,
+      workflows,
+      tasks,
+      taskEdges,
       get taskTemplateEdges() {
         return taskTemplateEdges;
       },
@@ -463,6 +481,113 @@ describe("definition routes", () => {
     expect(missingResponse.statusCode).toBe(404);
     expect(deleteResponse.statusCode).toBe(204);
     expect(ctx.state.taskTemplates.has("task-template-1")).toBe(false);
+  });
+
+  it("starts the same workflow definition twice as fresh runtime runs", async () => {
+    const ctx = createDependencies();
+    ctx.state.workflowDefinitions.set(
+      "workflow-definition-1",
+      createWorkflowDefinition("workflow-definition-1", {
+        name: "Reusable Workflow",
+      }),
+    );
+    ctx.state.taskTemplates.set(
+      "task-template-root",
+      createTaskTemplate("task-template-root", "workflow-definition-1", {
+        title: "Root task",
+        defaultAssigneeAgentId: "agent-1",
+      }),
+    );
+    ctx.state.taskTemplates.set(
+      "task-template-child",
+      createTaskTemplate("task-template-child", "workflow-definition-1", {
+        title: "Child task",
+      }),
+    );
+    ctx.state.taskTemplateEdges.push(
+      createTaskTemplateEdge("task-template-root", "task-template-child"),
+    );
+
+    await ctx.repositories.agentsRepository.upsert(createAgent("agent-1"));
+    app = buildApp(ctx.appDeps);
+
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/workflow-definitions/workflow-definition-1/start",
+    });
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/workflow-definitions/workflow-definition-1/start",
+    });
+    const firstBody = firstResponse.json() as {
+      workflowId: string;
+      workflowDefinitionId: string;
+      status: string;
+      enqueuedTaskIds: string[];
+      createdTaskIds: string[];
+    };
+    const secondBody = secondResponse.json() as typeof firstBody;
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(firstBody.workflowDefinitionId).toBe("workflow-definition-1");
+    expect(secondBody.workflowDefinitionId).toBe("workflow-definition-1");
+    expect(firstBody.workflowId).not.toBe(secondBody.workflowId);
+    expect(firstBody.createdTaskIds).toHaveLength(2);
+    expect(secondBody.createdTaskIds).toHaveLength(2);
+    expect(new Set(firstBody.createdTaskIds)).toHaveLength(2);
+    expect(
+      firstBody.createdTaskIds.every(
+        (taskId) => !secondBody.createdTaskIds.includes(taskId),
+      ),
+    ).toBe(true);
+    expect(firstBody.enqueuedTaskIds).toHaveLength(1);
+    expect(secondBody.enqueuedTaskIds).toHaveLength(1);
+    expect(ctx.state.workflows.size).toBe(2);
+    expect(ctx.state.tasks.size).toBe(4);
+    expect(ctx.state.taskEdges).toHaveLength(2);
+  });
+
+  it("rejects missing, disabled, and empty workflow definition starts", async () => {
+    const ctx = createDependencies();
+    ctx.state.workflowDefinitions.set(
+      "workflow-definition-disabled",
+      createWorkflowDefinition("workflow-definition-disabled", {
+        enabled: false,
+      }),
+    );
+    ctx.state.workflowDefinitions.set(
+      "workflow-definition-empty",
+      createWorkflowDefinition("workflow-definition-empty"),
+    );
+    app = buildApp(ctx.appDeps);
+
+    const missingResponse = await app.inject({
+      method: "POST",
+      url: "/workflow-definitions/missing-definition/start",
+    });
+    const disabledResponse = await app.inject({
+      method: "POST",
+      url: "/workflow-definitions/workflow-definition-disabled/start",
+    });
+    const emptyResponse = await app.inject({
+      method: "POST",
+      url: "/workflow-definitions/workflow-definition-empty/start",
+    });
+
+    expect(missingResponse.statusCode).toBe(404);
+    expect(disabledResponse.statusCode).toBe(409);
+    expect(disabledResponse.json()).toMatchObject({
+      error: {
+        code: "WORKFLOW_DEFINITION_DISABLED",
+      },
+    });
+    expect(emptyResponse.statusCode).toBe(409);
+    expect(emptyResponse.json()).toMatchObject({
+      error: {
+        code: "EMPTY_WORKFLOW_DEFINITION",
+      },
+    });
   });
 
   it("returns 409 when deleting a task template that still has template edges", async () => {

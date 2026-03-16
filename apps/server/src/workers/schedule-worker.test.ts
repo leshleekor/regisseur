@@ -3,7 +3,10 @@ import type {
   AgentDefinition,
   Schedule,
   Task,
+  TaskTemplate,
+  TaskTemplateEdge,
   Workflow,
+  WorkflowDefinition,
 } from "@regisseur/core";
 
 import { createScheduleTriggerProcessor } from "./schedule-worker.js";
@@ -60,6 +63,9 @@ describe("createScheduleTriggerProcessor", () => {
     const schedules = new Map([["schedule-1", createSchedule()]]);
     const tasks = new Map([["task-1", createTask()]]);
     const workflows = new Map([["workflow-1", createWorkflow()]]);
+    const workflowDefinitions = new Map<string, WorkflowDefinition>();
+    const taskTemplates = new Map<string, TaskTemplate>();
+    const taskTemplateEdges: TaskTemplateEdge[] = [];
     const processor = createScheduleTriggerProcessor({
       repositories: {
         agentsRepository: {
@@ -109,6 +115,51 @@ describe("createScheduleTriggerProcessor", () => {
             async (workflowId: string) => workflows.get(workflowId) ?? null,
           ),
           deleteById: vi.fn(async () => undefined),
+        },
+        workflowDefinitionsRepository: {
+          upsert: vi.fn(async (workflowDefinition: WorkflowDefinition) => {
+            workflowDefinitions.set(
+              workflowDefinition.workflowDefinitionId,
+              workflowDefinition,
+            );
+          }),
+          findAll: vi.fn(async () => Array.from(workflowDefinitions.values())),
+          findEnabled: vi.fn(async () =>
+            Array.from(workflowDefinitions.values()).filter(
+              (workflowDefinition) => workflowDefinition.enabled,
+            ),
+          ),
+          findById: vi.fn(async () => null),
+          deleteById: vi.fn(async () => undefined),
+        },
+        taskTemplatesRepository: {
+          upsert: vi.fn(async (taskTemplate: TaskTemplate) => {
+            taskTemplates.set(taskTemplate.taskTemplateId, taskTemplate);
+          }),
+          findByWorkflowDefinitionId: vi.fn(
+            async (workflowDefinitionId: string) =>
+              Array.from(taskTemplates.values()).filter(
+                (taskTemplate) =>
+                  taskTemplate.workflowDefinitionId === workflowDefinitionId,
+              ),
+          ),
+          findById: vi.fn(async () => null),
+          deleteById: vi.fn(async () => undefined),
+        },
+        taskTemplateEdgesRepository: {
+          insert: vi.fn(async (taskTemplateEdge: TaskTemplateEdge) => {
+            taskTemplateEdges.push(taskTemplateEdge);
+          }),
+          insertMany: vi.fn(
+            async (nextTaskTemplateEdges: readonly TaskTemplateEdge[]) => {
+              taskTemplateEdges.push(...nextTaskTemplateEdges);
+            },
+          ),
+          findAllByWorkflowDefinitionTaskTemplates: vi.fn(async () => []),
+          findByFromTaskTemplateId: vi.fn(async () => []),
+          findByToTaskTemplateId: vi.fn(async () => []),
+          deleteByTaskTemplateId: vi.fn(async () => undefined),
+          deleteEdge: vi.fn(async () => undefined),
         },
       },
       enqueuePort: {

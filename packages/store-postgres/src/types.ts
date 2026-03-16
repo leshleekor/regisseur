@@ -24,6 +24,10 @@ export interface WorkflowRow extends QueryResultRow {
   workflow_id: string;
   name: string;
   status: string;
+  workflow_definition_id: string | null;
+  trigger_source: string | null;
+  triggered_by_schedule_id: string | null;
+  started_at: TimestampValue | null;
   metadata: unknown | null;
   created_at: TimestampValue;
   updated_at: TimestampValue;
@@ -47,6 +51,7 @@ export interface TaskRow extends QueryResultRow {
   status: string;
   assignee_agent_id: string | null;
   retry_count: number;
+  task_template_id: string | null;
   concurrency_key: string | null;
   metadata: unknown | null;
   created_at: TimestampValue;
@@ -117,6 +122,10 @@ export interface WorkflowRowInput {
   workflow_id: string;
   name: string;
   status: string;
+  workflow_definition_id: string | null;
+  trigger_source: string | null;
+  triggered_by_schedule_id: string | null;
+  started_at: string | null;
   metadata: string | null;
   created_at: string;
   updated_at: string;
@@ -140,6 +149,7 @@ export interface TaskRowInput {
   status: string;
   assignee_agent_id: string | null;
   retry_count: number;
+  task_template_id: string | null;
   concurrency_key: string | null;
   metadata: string | null;
   created_at: string;

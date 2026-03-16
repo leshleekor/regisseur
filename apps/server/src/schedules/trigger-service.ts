@@ -1,14 +1,8 @@
-import {
-  evaluateTaskReadiness,
-  getDependencyTaskIds,
-  type AgentDefinition,
-  type Schedule,
-  type Task,
-  type TaskEdge,
-} from "@regisseur/core";
+import { type AgentDefinition, type Schedule } from "@regisseur/core";
 import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 import type { ScheduleTriggerJobPayload } from "@regisseur/queue-bullmq";
 
+import { materializeWorkflowDefinitionRun } from "../definitions/materialize-workflow-definition-run.js";
 import {
   selectPersistAndEnqueue,
   type SelectPersistAndEnqueueResult,
@@ -17,7 +11,10 @@ import type {
   AgentsRepositoryLike,
   SchedulesRepositoryLike,
   TaskEdgesRepositoryLike,
+  TaskTemplateEdgesRepositoryLike,
+  TaskTemplatesRepositoryLike,
   TasksRepositoryLike,
+  WorkflowDefinitionsRepositoryLike,
   WorkflowsRepositoryLike,
 } from "../types.js";
 
@@ -27,6 +24,9 @@ export interface ScheduleTriggerRepositories {
   tasksRepository: TasksRepositoryLike;
   taskEdgesRepository: TaskEdgesRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
+  workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike;
+  taskTemplatesRepository: TaskTemplatesRepositoryLike;
+  taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
 }
 
 export interface HandleScheduleTriggerResult {
@@ -38,14 +38,14 @@ export interface HandleScheduleTriggerResult {
     | "SCHEDULE_DISABLED"
     | "TASK_NOT_FOUND"
     | "TASK_NOT_READY"
-    | "WORKFLOW_NOT_FOUND"
-    | "WORKFLOW_FAILED"
-    | "NO_READY_ROOT_TASKS";
+    | "DEFINITION_NOT_FOUND"
+    | "DEFINITION_DISABLED";
 }
 
 export interface HandleScheduleTriggerOptions {
   now?: () => string;
   selectPersistAndEnqueueImpl?: typeof selectPersistAndEnqueue;
+  materializeWorkflowDefinitionRunImpl?: typeof materializeWorkflowDefinitionRun;
   logError?: (message: string, error: unknown) => void;
 }
 
@@ -59,15 +59,6 @@ function createSkippedResult(
     skipped: true,
     skippedReason,
   };
-}
-
-function getRootTasks(
-  tasks: readonly Task[],
-  edges: readonly TaskEdge[],
-): Task[] {
-  return tasks.filter(
-    (task) => getDependencyTaskIds(task.taskId, edges).length === 0,
-  );
 }
 
 async function getAllAgents(
@@ -136,67 +127,47 @@ async function triggerScheduledWorkflow(
   enqueuePort: DispatchEnqueuePort,
   options: HandleScheduleTriggerOptions,
 ): Promise<HandleScheduleTriggerResult> {
-  const workflow = await repositories.workflowsRepository.findById(
-    schedule.targetId,
-  );
-
-  if (!workflow) {
-    return createSkippedResult(schedule.scheduleId, "WORKFLOW_NOT_FOUND");
-  }
-
-  if (workflow.status === "failed") {
-    return createSkippedResult(schedule.scheduleId, "WORKFLOW_FAILED");
-  }
-
-  const tasks = await repositories.tasksRepository.findByWorkflowId(
-    workflow.workflowId,
-  );
-  const taskIds = tasks.map((task) => task.taskId);
-  const edges =
-    taskIds.length === 0
-      ? []
-      : await repositories.taskEdgesRepository.findAllByWorkflowTasks(taskIds);
-  const rootTasks = getRootTasks(tasks, edges).filter(
-    (task) => evaluateTaskReadiness(task, tasks, edges).isReady,
-  );
-
-  if (rootTasks.length === 0) {
-    return createSkippedResult(schedule.scheduleId, "NO_READY_ROOT_TASKS");
-  }
-
-  const allAgents = await getAllAgents(repositories);
-  const enqueuedTaskIds: string[] = [];
-
-  for (const rootTask of rootTasks) {
-    const result = assertEnqueueDidNotFail(
-      await (options.selectPersistAndEnqueueImpl ?? selectPersistAndEnqueue)(
-        rootTask,
-        allAgents,
-        {
-          tasksRepository: repositories.tasksRepository,
-          workflowsRepository: repositories.workflowsRepository,
-        },
-        enqueuePort,
-        {
-          triggerSource: "schedule",
-          requestedAt: payload.triggeredAt,
-          selectionFailureMode: "fail_task",
-          now: options.now,
-        },
-      ),
+  const workflowDefinition =
+    await repositories.workflowDefinitionsRepository.findById(
+      schedule.targetId,
     );
 
-    if (result.ok) {
-      enqueuedTaskIds.push(result.taskId);
-    }
+  if (!workflowDefinition) {
+    return createSkippedResult(schedule.scheduleId, "DEFINITION_NOT_FOUND");
   }
+
+  if (!workflowDefinition.enabled) {
+    return createSkippedResult(schedule.scheduleId, "DEFINITION_DISABLED");
+  }
+
+  const result = await (
+    options.materializeWorkflowDefinitionRunImpl ??
+    materializeWorkflowDefinitionRun
+  )(
+    schedule.targetId,
+    {
+      agentsRepository: repositories.agentsRepository,
+      workflowsRepository: repositories.workflowsRepository,
+      tasksRepository: repositories.tasksRepository,
+      taskEdgesRepository: repositories.taskEdgesRepository,
+      workflowDefinitionsRepository: repositories.workflowDefinitionsRepository,
+      taskTemplatesRepository: repositories.taskTemplatesRepository,
+      taskTemplateEdgesRepository: repositories.taskTemplateEdgesRepository,
+    },
+    enqueuePort,
+    {
+      triggerSource: "schedule",
+      scheduleId: schedule.scheduleId,
+      requestedAt: payload.triggeredAt,
+      now: options.now,
+      selectPersistAndEnqueueImpl: options.selectPersistAndEnqueueImpl,
+    },
+  );
 
   return {
     scheduleId: schedule.scheduleId,
-    enqueuedTaskIds,
-    skipped: enqueuedTaskIds.length === 0,
-    skippedReason:
-      enqueuedTaskIds.length === 0 ? "NO_READY_ROOT_TASKS" : undefined,
+    enqueuedTaskIds: result.enqueuedTaskIds,
+    skipped: false,
   };
 }
 

@@ -15,6 +15,7 @@
     "dist"
   ],
   "dependencies": {
+    "@regisseur/core": "workspace:*",
     "bullmq": "^5.56.0"
   },
   "scripts": {

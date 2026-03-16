@@ -1,14 +1,14 @@
-export const TASK_DISPATCH_TRIGGER_SOURCES = [
-  "manual",
-  "schedule",
-  "internal",
-] as const;
+import {
+  DISPATCH_TRIGGER_SOURCES,
+  type DispatchTriggerSource,
+} from "@regisseur/core";
+
+export const TASK_DISPATCH_TRIGGER_SOURCES = DISPATCH_TRIGGER_SOURCES;
 
 /**
  * Sources that can request a task dispatch job.
  */
-export type TaskDispatchTriggerSource =
-  (typeof TASK_DISPATCH_TRIGGER_SOURCES)[number];
+export type TaskDispatchTriggerSource = DispatchTriggerSource;
 
 /**
  * Minimum payload required to enqueue a task dispatch job.

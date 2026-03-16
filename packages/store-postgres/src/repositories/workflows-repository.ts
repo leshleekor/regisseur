@@ -18,15 +18,34 @@ export class PostgresWorkflowsRepository {
           workflow_id,
           name,
           status,
+          workflow_definition_id,
+          trigger_source,
+          triggered_by_schedule_id,
+          started_at,
           metadata,
           created_at,
           updated_at
-        ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz)
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::timestamptz,
+          $8::jsonb,
+          $9::timestamptz,
+          $10::timestamptz
+        )
       `,
       [
         row.workflow_id,
         row.name,
         row.status,
+        row.workflow_definition_id,
+        row.trigger_source,
+        row.triggered_by_schedule_id,
+        row.started_at,
         row.metadata,
         row.created_at,
         row.updated_at,
@@ -43,13 +62,32 @@ export class PostgresWorkflowsRepository {
           workflow_id,
           name,
           status,
+          workflow_definition_id,
+          trigger_source,
+          triggered_by_schedule_id,
+          started_at,
           metadata,
           created_at,
           updated_at
-        ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz)
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::timestamptz,
+          $8::jsonb,
+          $9::timestamptz,
+          $10::timestamptz
+        )
         ON CONFLICT (workflow_id) DO UPDATE SET
           name = EXCLUDED.name,
           status = EXCLUDED.status,
+          workflow_definition_id = EXCLUDED.workflow_definition_id,
+          trigger_source = EXCLUDED.trigger_source,
+          triggered_by_schedule_id = EXCLUDED.triggered_by_schedule_id,
+          started_at = EXCLUDED.started_at,
           metadata = EXCLUDED.metadata,
           updated_at = EXCLUDED.updated_at
       `,
@@ -57,6 +95,10 @@ export class PostgresWorkflowsRepository {
         row.workflow_id,
         row.name,
         row.status,
+        row.workflow_definition_id,
+        row.trigger_source,
+        row.triggered_by_schedule_id,
+        row.started_at,
         row.metadata,
         row.created_at,
         row.updated_at,

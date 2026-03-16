@@ -43,6 +43,11 @@ export function createDispatchWorker(
         tasksRepository: options.repositories.tasksRepository,
         taskEdgesRepository: options.repositories.taskEdgesRepository,
         workflowsRepository: options.repositories.workflowsRepository,
+        workflowDefinitionsRepository:
+          options.repositories.workflowDefinitionsRepository,
+        taskTemplatesRepository: options.repositories.taskTemplatesRepository,
+        taskTemplateEdgesRepository:
+          options.repositories.taskTemplateEdgesRepository,
       },
       enqueuePort: options.enqueuePort,
     }),

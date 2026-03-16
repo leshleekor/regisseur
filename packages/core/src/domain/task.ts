@@ -45,6 +45,8 @@ export interface Task {
   assigneeAgentId?: string;
   /** Number of retries that have already been consumed for this task. */
   retryCount: number;
+  /** Optional provenance back-reference to the template this task came from. */
+  taskTemplateId?: string;
   /** Optional logical lock key used to prevent concurrent execution clashes. */
   concurrencyKey?: string;
   /** Creation timestamp recorded when the task is first persisted. */

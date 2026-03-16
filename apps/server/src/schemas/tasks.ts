@@ -1,8 +1,10 @@
-import { TASK_STATUSES, type Task, type TaskStatus } from "@regisseur/core";
 import {
   DISPATCH_TRIGGER_SOURCES,
+  TASK_STATUSES,
   type DispatchTriggerSource,
-} from "@regisseur/dispatcher";
+  type Task,
+  type TaskStatus,
+} from "@regisseur/core";
 
 import { badRequest } from "../errors/http-error.js";
 import {
@@ -48,6 +50,7 @@ export function parseTaskBody(value: unknown): Task {
       "assigneeAgentId",
     ),
     retryCount: expectNumber(body.retryCount, "retryCount"),
+    taskTemplateId: expectOptionalString(body.taskTemplateId, "taskTemplateId"),
     concurrencyKey: expectOptionalString(body.concurrencyKey, "concurrencyKey"),
     metadata: expectOptionalObject(body.metadata, "metadata"),
     createdAt: expectString(body.createdAt, "createdAt"),

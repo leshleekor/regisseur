@@ -1,4 +1,5 @@
 import {
+  DISPATCH_TRIGGER_SOURCES,
   WORKFLOW_STATUSES,
   type Workflow,
   type WorkflowStatus,
@@ -7,6 +8,7 @@ import {
 import {
   expectEnumValue,
   expectOptionalObject,
+  expectOptionalString,
   expectRecord,
   expectString,
 } from "../utils/parse-body.js";
@@ -22,6 +24,23 @@ export function parseWorkflowBody(value: unknown): Workflow {
     workflowId: expectString(body.workflowId, "workflowId"),
     name: expectString(body.name, "name"),
     status: expectEnumValue(body.status, WORKFLOW_STATUSES, "status"),
+    workflowDefinitionId: expectOptionalString(
+      body.workflowDefinitionId,
+      "workflowDefinitionId",
+    ),
+    triggerSource:
+      body.triggerSource === undefined
+        ? undefined
+        : expectEnumValue(
+            body.triggerSource,
+            DISPATCH_TRIGGER_SOURCES,
+            "triggerSource",
+          ),
+    triggeredByScheduleId: expectOptionalString(
+      body.triggeredByScheduleId,
+      "triggeredByScheduleId",
+    ),
+    startedAt: expectOptionalString(body.startedAt, "startedAt"),
     createdAt: expectString(body.createdAt, "createdAt"),
     updatedAt: expectString(body.updatedAt, "updatedAt"),
     metadata: expectOptionalObject(body.metadata, "metadata"),

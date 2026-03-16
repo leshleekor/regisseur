@@ -13,6 +13,10 @@ export interface WorkflowDefinitionsQuery {
   enabled?: true;
 }
 
+export interface WorkflowDefinitionStartBody {
+  requestedAt?: string;
+}
+
 export function parseWorkflowDefinitionBody(
   value: unknown,
 ): WorkflowDefinition {
@@ -39,5 +43,19 @@ export function parseWorkflowDefinitionsQuery(
 
   return {
     enabled: expectTrueQueryFlag(query.enabled, "enabled"),
+  };
+}
+
+export function parseWorkflowDefinitionStartBody(
+  value: unknown,
+): WorkflowDefinitionStartBody {
+  if (value === undefined) {
+    return {};
+  }
+
+  const body = expectRecord(value, "body");
+
+  return {
+    requestedAt: expectOptionalString(body.requestedAt, "requestedAt"),
   };
 }

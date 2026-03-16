@@ -12,6 +12,7 @@ export function mapTaskToRowInput(task: Task): TaskRowInput {
     status: task.status,
     assignee_agent_id: task.assigneeAgentId ?? null,
     retry_count: task.retryCount,
+    task_template_id: task.taskTemplateId ?? null,
     concurrency_key: task.concurrencyKey ?? null,
     metadata: task.metadata ? JSON.stringify(task.metadata) : null,
     created_at: task.createdAt,
@@ -31,6 +32,9 @@ export function mapTaskRowToDomain(row: TaskRow): Task {
     updatedAt: toIsoTimestamp(row.updated_at),
     ...(row.assignee_agent_id !== null
       ? { assigneeAgentId: row.assignee_agent_id }
+      : {}),
+    ...(row.task_template_id !== null
+      ? { taskTemplateId: row.task_template_id }
       : {}),
     ...(row.concurrency_key !== null
       ? { concurrencyKey: row.concurrency_key }

@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 
-import { notFound } from "../errors/http-error.js";
+import { badGateway, notFound } from "../errors/http-error.js";
+import { materializeWorkflowDefinitionRun } from "../definitions/materialize-workflow-definition-run.js";
 import {
   parseWorkflowDefinitionBody,
+  parseWorkflowDefinitionStartBody,
   parseWorkflowDefinitionsQuery,
 } from "../schemas/workflow-definitions.js";
 import { expectRecord, expectString } from "../utils/parse-body.js";
@@ -45,6 +47,56 @@ export function registerWorkflowDefinitionRoutes(
 
     return workflowDefinition;
   });
+
+  app.post(
+    "/workflow-definitions/:workflowDefinitionId/start",
+    async (request) => {
+      const params = expectRecord(request.params, "params");
+      const workflowDefinitionId = expectString(
+        params.workflowDefinitionId,
+        "workflowDefinitionId",
+      );
+      const startBody = parseWorkflowDefinitionStartBody(request.body);
+
+      try {
+        const result = await materializeWorkflowDefinitionRun(
+          workflowDefinitionId,
+          {
+            agentsRepository: deps.agentsRepository,
+            workflowsRepository: deps.workflowsRepository,
+            tasksRepository: deps.tasksRepository,
+            taskEdgesRepository: deps.taskEdgesRepository,
+            workflowDefinitionsRepository: deps.workflowDefinitionsRepository,
+            taskTemplatesRepository: deps.taskTemplatesRepository,
+            taskTemplateEdgesRepository: deps.taskTemplateEdgesRepository,
+          },
+          deps.enqueuePort,
+          {
+            triggerSource: "manual",
+            requestedAt: startBody.requestedAt,
+          },
+        );
+
+        return {
+          workflowId: result.workflow.workflowId,
+          workflowDefinitionId: result.workflow.workflowDefinitionId,
+          status: result.workflow.status,
+          enqueuedTaskIds: result.enqueuedTaskIds,
+          createdTaskIds: result.createdTaskIds,
+        };
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.name === "Error" &&
+          !(error as { statusCode?: unknown }).statusCode
+        ) {
+          throw badGateway("WORKFLOW_DEFINITION_START_FAILED", error.message);
+        }
+
+        throw error;
+      }
+    },
+  );
 
   app.delete(
     "/workflow-definitions/:workflowDefinitionId",

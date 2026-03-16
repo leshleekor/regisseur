@@ -323,9 +323,11 @@ describe.sequential("store-postgres integration", () => {
             "idx_tasks_workflow_id",
             "idx_tasks_status",
             "idx_tasks_assignee_agent_id",
+            "idx_tasks_task_template_id",
             "idx_task_edges_to_task_id",
             "idx_task_edges_from_task_id",
             "idx_workflow_definitions_enabled",
+            "idx_workflows_workflow_definition_id",
             "idx_task_templates_workflow_definition_id",
             "idx_task_templates_default_assignee_agent_id",
             "idx_task_template_edges_from_task_template_id",
@@ -356,8 +358,10 @@ describe.sequential("store-postgres integration", () => {
         "idx_task_templates_workflow_definition_id",
         "idx_tasks_assignee_agent_id",
         "idx_tasks_status",
+        "idx_tasks_task_template_id",
         "idx_tasks_workflow_id",
         "idx_workflow_definitions_enabled",
+        "idx_workflows_workflow_definition_id",
       ]);
       expect(constraints.rows).toHaveLength(1);
     });
@@ -481,6 +485,25 @@ describe.sequential("store-postgres integration", () => {
 
       expect(await workflowsRepository.findById("workflow-1")).toEqual(
         updatedWorkflow,
+      );
+    });
+
+    it("round-trips workflow provenance fields", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+
+      const workflow = createWorkflow("workflow-1", {
+        workflowDefinitionId: "workflow-definition-1",
+        triggerSource: "schedule",
+        triggeredByScheduleId: "schedule-1",
+        startedAt: "2026-03-15T00:01:00.000Z",
+      });
+
+      await workflowsRepository.insert(workflow);
+
+      expect(await workflowsRepository.findById("workflow-1")).toEqual(
+        workflow,
       );
     });
 
@@ -629,6 +652,29 @@ describe.sequential("store-postgres integration", () => {
       await tasksRepository.upsert(updatedTask);
 
       expect(await tasksRepository.findById("task-1")).toEqual(updatedTask);
+    });
+
+    it("round-trips task template provenance fields", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+      await workflowsRepository.insert(
+        createWorkflow("workflow-1", {
+          workflowDefinitionId: "workflow-definition-1",
+          triggerSource: "manual",
+        }),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-1", "workflow-definition-1"),
+      );
+
+      const task = createTask("task-1", "workflow-1", {
+        taskTemplateId: "task-template-1",
+      });
+
+      await tasksRepository.insert(task);
+
+      expect(await tasksRepository.findById("task-1")).toEqual(task);
     });
 
     it("finds tasks by workflow, status, and ready state in created_at ascending order", async () => {
@@ -1278,6 +1324,7 @@ describe.sequential("store-postgres integration", () => {
         status: "ready",
         assignee_agent_id: null,
         retry_count: 0,
+        task_template_id: "task-template-1",
         concurrency_key: null,
         metadata: { priority: "high" },
         created_at: "2026-03-15T00:00:00.000Z",
@@ -1299,6 +1346,7 @@ describe.sequential("store-postgres integration", () => {
       expect(agent.capabilities).toEqual(["review"]);
       expect(agent.config).toEqual({ endpoint: "http://localhost" });
       expect(task.payload).toEqual({ input: "value" });
+      expect(task.taskTemplateId).toBe("task-template-1");
       expect(task.metadata).toEqual({ priority: "high" });
       expect(run.output).toEqual({ value: "ok" });
     });
@@ -1336,6 +1384,10 @@ describe.sequential("store-postgres integration", () => {
         workflow_id: "workflow-1",
         name: "Workflow",
         status: "running",
+        workflow_definition_id: "workflow-definition-1",
+        trigger_source: "manual",
+        triggered_by_schedule_id: "schedule-1",
+        started_at: new Date("2026-03-15T00:01:00.000Z"),
         metadata: null,
         created_at: new Date("2026-03-15T00:00:00.000Z"),
         updated_at: new Date("2026-03-15T01:00:00.000Z"),
@@ -1367,6 +1419,10 @@ describe.sequential("store-postgres integration", () => {
 
       expect(workflow.createdAt).toBe("2026-03-15T00:00:00.000Z");
       expect(workflow.updatedAt).toBe("2026-03-15T01:00:00.000Z");
+      expect(workflow.workflowDefinitionId).toBe("workflow-definition-1");
+      expect(workflow.triggerSource).toBe("manual");
+      expect(workflow.triggeredByScheduleId).toBe("schedule-1");
+      expect(workflow.startedAt).toBe("2026-03-15T00:01:00.000Z");
       expect(schedule.runAt).toBe("2026-03-15T02:00:00.000Z");
       expect(run.startedAt).toBe("2026-03-15T00:10:00.000Z");
       expect(run.finishedAt).toBe("2026-03-15T00:11:00.000Z");
@@ -1381,6 +1437,7 @@ describe.sequential("store-postgres integration", () => {
         status: "pending",
         assignee_agent_id: null,
         retry_count: 0,
+        task_template_id: null,
         concurrency_key: null,
         metadata: null,
         created_at: "2026-03-15T00:00:00.000Z",

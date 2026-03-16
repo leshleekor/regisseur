@@ -22,6 +22,7 @@ export class PostgresTasksRepository {
           status,
           assignee_agent_id,
           retry_count,
+          task_template_id,
           concurrency_key,
           metadata,
           created_at,
@@ -35,9 +36,10 @@ export class PostgresTasksRepository {
           $6,
           $7,
           $8,
-          $9::jsonb,
-          $10::timestamptz,
-          $11::timestamptz
+          $9,
+          $10::jsonb,
+          $11::timestamptz,
+          $12::timestamptz
         )
       `,
       [
@@ -48,6 +50,7 @@ export class PostgresTasksRepository {
         row.status,
         row.assignee_agent_id,
         row.retry_count,
+        row.task_template_id,
         row.concurrency_key,
         row.metadata,
         row.created_at,
@@ -69,6 +72,7 @@ export class PostgresTasksRepository {
           status,
           assignee_agent_id,
           retry_count,
+          task_template_id,
           concurrency_key,
           metadata,
           created_at,
@@ -82,9 +86,10 @@ export class PostgresTasksRepository {
           $6,
           $7,
           $8,
-          $9::jsonb,
-          $10::timestamptz,
-          $11::timestamptz
+          $9,
+          $10::jsonb,
+          $11::timestamptz,
+          $12::timestamptz
         )
         ON CONFLICT (task_id) DO UPDATE SET
           workflow_id = EXCLUDED.workflow_id,
@@ -93,6 +98,7 @@ export class PostgresTasksRepository {
           status = EXCLUDED.status,
           assignee_agent_id = EXCLUDED.assignee_agent_id,
           retry_count = EXCLUDED.retry_count,
+          task_template_id = EXCLUDED.task_template_id,
           concurrency_key = EXCLUDED.concurrency_key,
           metadata = EXCLUDED.metadata,
           updated_at = EXCLUDED.updated_at
@@ -105,6 +111,7 @@ export class PostgresTasksRepository {
         row.status,
         row.assignee_agent_id,
         row.retry_count,
+        row.task_template_id,
         row.concurrency_key,
         row.metadata,
         row.created_at,

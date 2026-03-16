@@ -1,15 +1,7 @@
-import type { AgentDefinition } from "@regisseur/core";
+import type { AgentDefinition, DispatchTriggerSource } from "@regisseur/core";
 
-export const DISPATCH_TRIGGER_SOURCES = [
-  "manual",
-  "schedule",
-  "internal",
-] as const;
-
-/**
- * Sources that can trigger dispatch intent creation.
- */
-export type DispatchTriggerSource = (typeof DISPATCH_TRIGGER_SOURCES)[number];
+export { DISPATCH_TRIGGER_SOURCES } from "@regisseur/core";
+export type { DispatchTriggerSource } from "@regisseur/core";
 
 /**
  * Dispatcher-local contract describing what should be enqueued after agent

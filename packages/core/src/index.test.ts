@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_RUNTIME_TYPES,
+  DISPATCH_TRIGGER_SOURCES,
   RUNNABLE_TASK_STATUSES,
   RUN_STATUSES,
   SCHEDULE_TARGET_TYPES,
@@ -47,6 +48,9 @@ describe("core domain exports", () => {
       workflowId: "wf-1",
       name: "Feature Delivery Workflow",
       status: "running",
+      workflowDefinitionId: "workflow-definition-1",
+      triggerSource: "manual",
+      startedAt: "2026-03-12T00:00:00.000Z",
       createdAt: "2026-03-12T00:00:00.000Z",
       updatedAt: "2026-03-12T00:05:00.000Z",
       metadata: {
@@ -76,6 +80,7 @@ describe("core domain exports", () => {
       status: "ready",
       assigneeAgentId: agent.agentId,
       retryCount: 0,
+      taskTemplateId: "task-template-1",
       concurrencyKey: "repo:regisseur",
       createdAt: "2026-03-12T00:00:00.000Z",
       updatedAt: "2026-03-12T00:05:00.000Z",
@@ -141,6 +146,8 @@ describe("core domain exports", () => {
     expect(templateEdge.type).toBe("depends_on");
     expect(schedule.targetType).toBe("workflow");
     expect(run.status).toBe("queued");
+    expect(workflow.triggerSource).toBe("manual");
+    expect(task.taskTemplateId).toBe(taskTemplate.taskTemplateId);
   });
 });
 
@@ -212,6 +219,11 @@ describe("status catalogs", () => {
     expect(TASK_TEMPLATE_EDGE_TYPES).toEqual(["depends_on"]);
     expect(SCHEDULE_TYPES).toEqual(["once", "cron"]);
     expect(SCHEDULE_TARGET_TYPES).toEqual(["workflow", "task"]);
+    expect(DISPATCH_TRIGGER_SOURCES).toEqual([
+      "manual",
+      "schedule",
+      "internal",
+    ]);
     expect(WORKFLOW_STATUSES).toEqual([
       "pending",
       "running",
