@@ -1,5 +1,6 @@
 import {
   DISPATCH_TRIGGER_SOURCES,
+  TASK_GENERATION_SOURCES,
   TASK_STATUSES,
   type DispatchTriggerSource,
   type Task,
@@ -51,6 +52,14 @@ export function parseTaskBody(value: unknown): Task {
     ),
     retryCount: expectNumber(body.retryCount, "retryCount"),
     taskTemplateId: expectOptionalString(body.taskTemplateId, "taskTemplateId"),
+    generationSource:
+      body.generationSource === undefined
+        ? undefined
+        : expectEnumValue(
+            body.generationSource,
+            TASK_GENERATION_SOURCES,
+            "generationSource",
+          ),
     concurrencyKey: expectOptionalString(body.concurrencyKey, "concurrencyKey"),
     metadata: expectOptionalObject(body.metadata, "metadata"),
     createdAt: expectString(body.createdAt, "createdAt"),

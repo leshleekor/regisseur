@@ -97,6 +97,7 @@ function createRepositories(options: {
             (task) => task.workflowId === workflowId,
           ),
         ),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
         findById: vi.fn(async (taskId: string) => tasks.get(taskId) ?? null),
         findByStatus: vi.fn(async () => []),
         upsert: vi.fn(async (task: Task) => {

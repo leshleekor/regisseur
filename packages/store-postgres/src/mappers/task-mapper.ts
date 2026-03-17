@@ -16,6 +16,7 @@ export function mapTaskToRowInput(task: Task): TaskRowInput {
     loop_definition_id: task.loopDefinitionId ?? null,
     iteration: task.iteration ?? null,
     spawned_from_task_id: task.spawnedFromTaskId ?? null,
+    generation_source: task.generationSource ?? null,
     concurrency_key: task.concurrencyKey ?? null,
     metadata: task.metadata ? JSON.stringify(task.metadata) : null,
     created_at: task.createdAt,
@@ -45,6 +46,9 @@ export function mapTaskRowToDomain(row: TaskRow): Task {
     ...(row.iteration !== null ? { iteration: row.iteration } : {}),
     ...(row.spawned_from_task_id !== null
       ? { spawnedFromTaskId: row.spawned_from_task_id }
+      : {}),
+    ...(row.generation_source !== null
+      ? { generationSource: row.generation_source as Task["generationSource"] }
       : {}),
     ...(row.concurrency_key !== null
       ? { concurrencyKey: row.concurrency_key }

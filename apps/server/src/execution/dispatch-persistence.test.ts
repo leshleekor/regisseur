@@ -69,6 +69,7 @@ function createStatefulRepositories(task: Task, workflow: Workflow) {
             (candidate) => candidate.workflowId === workflowId,
           ),
         ),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
       workflowsRepository: {
         findById: vi.fn(
@@ -93,6 +94,7 @@ describe("selectPersistAndEnqueue", () => {
           callLog.push("tasks.upsert");
         }),
         findByWorkflowId: vi.fn(async () => []),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
       workflowsRepository: {
         findById: vi.fn(async () => workflow),
@@ -149,6 +151,7 @@ describe("selectPersistAndEnqueue", () => {
           throw new Error("persist failed");
         }),
         findByWorkflowId: vi.fn(async () => []),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
       workflowsRepository: {
         findById: vi.fn(async () => createWorkflow("workflow-1")),

@@ -152,6 +152,27 @@ function createInMemoryPool() {
         );
       }
 
+      if (
+        sql.includes("SELECT COUNT(*)::text AS count") &&
+        sql.includes("FROM tasks") &&
+        sql.includes("generation_source = $2")
+      ) {
+        const workflowId = String(values[0]);
+        const generationSource = String(values[1]);
+
+        return createQueryResult([
+          {
+            count: String(
+              Array.from(tasks.values()).filter(
+                (task) =>
+                  task.workflow_id === workflowId &&
+                  task.generation_source === generationSource,
+              ).length,
+            ),
+          },
+        ]);
+      }
+
       if (sql.includes("INSERT INTO tasks") && sql.includes("ON CONFLICT")) {
         const [
           taskId,
@@ -165,6 +186,7 @@ function createInMemoryPool() {
           loopDefinitionId,
           iteration,
           spawnedFromTaskId,
+          generationSource,
           concurrencyKey,
           metadata,
           createdAt,
@@ -187,6 +209,8 @@ function createInMemoryPool() {
           iteration: iteration === null ? null : Number(iteration),
           spawned_from_task_id:
             spawnedFromTaskId === null ? null : String(spawnedFromTaskId),
+          generation_source:
+            generationSource === null ? null : String(generationSource),
           concurrency_key:
             concurrencyKey === null ? null : String(concurrencyKey),
           metadata: metadata === null ? null : JSON.parse(String(metadata)),
@@ -414,6 +438,7 @@ describe("standalone runtime composition", () => {
       loop_definition_id: null,
       iteration: null,
       spawned_from_task_id: null,
+      generation_source: null,
       concurrency_key: null,
       metadata: null,
       created_at: "2026-03-15T00:00:00.000Z",

@@ -78,6 +78,7 @@ function createLoopTask(
     loopDefinitionId,
     iteration,
     spawnedFromTaskId,
+    generationSource: "loop",
     ...(taskTemplate.defaultAssigneeAgentId !== undefined
       ? { assigneeAgentId: taskTemplate.defaultAssigneeAgentId }
       : {}),

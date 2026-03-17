@@ -148,6 +148,14 @@ function createRepositories(options: {
           ),
         ),
         findByStatus: vi.fn(async () => []),
+        countByWorkflowIdAndGenerationSource: vi.fn(
+          async (workflowId: string, source: Task["generationSource"]) =>
+            Array.from(tasks.values()).filter(
+              (task) =>
+                task.workflowId === workflowId &&
+                task.generationSource === source,
+            ).length,
+        ),
         upsert: vi.fn(async (task: Task) => {
           tasks.set(task.taskId, task);
         }),
@@ -339,6 +347,90 @@ describe("executeTaskLifecycle", () => {
     );
   });
 
+  it("applies dynamic expansion and still runs static downstream progression", async () => {
+    const task = createTask("task-1", "workflow-1", {
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "running" });
+    const agent = createAgent("agent-1");
+    const { repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const progressDownstreamTasksImpl = vi.fn(async () => ({
+      enqueuedTaskIds: [],
+      skippedTaskIds: [],
+      failures: [],
+      skippedBecauseWorkflowFailed: false,
+    }));
+    const applyDynamicExpansionImpl = vi.fn(async () => ({
+      ok: true as const,
+      applied: true,
+      createdTaskIds: ["dynamic-task-1"],
+      enqueuedTaskIds: ["dynamic-task-1"],
+      failures: [],
+    }));
+
+    await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute: vi.fn(async () => ({
+            ok: true as const,
+            output: {
+              orchestration: {
+                spawn: {
+                  tasks: [
+                    {
+                      taskKey: "dynamic-task-1",
+                      title: "Dynamic Task",
+                      payload: {},
+                      retryCount: 0,
+                    },
+                  ],
+                },
+              },
+            },
+          })),
+        },
+      },
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+        randomUUIDImpl: () => "run-1",
+        applyDynamicExpansionImpl,
+        progressDownstreamTasksImpl,
+      },
+    );
+
+    expect(applyDynamicExpansionImpl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-1",
+        status: "succeeded",
+      }),
+      expect.objectContaining({
+        workflowId: "workflow-1",
+      }),
+      expect.objectContaining({
+        tasks: [
+          expect.objectContaining({
+            taskKey: "dynamic-task-1",
+          }),
+        ],
+      }),
+      repositories,
+      expect.any(Object),
+      expect.objectContaining({
+        now: expect.any(Function),
+        randomUUIDImpl: expect.any(Function),
+      }),
+    );
+    expect(progressDownstreamTasksImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("marks run, task, and workflow failed when adapter execution fails", async () => {
     const task = createTask("task-1", "workflow-1", {
       assigneeAgentId: "agent-1",
@@ -503,6 +595,70 @@ describe("executeTaskLifecycle", () => {
     expect(progressDownstreamTasksImpl).not.toHaveBeenCalled();
   });
 
+  it("fails the workflow when dynamic expansion rejects", async () => {
+    const task = createTask("task-1", "workflow-1", {
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "running" });
+    const agent = createAgent("agent-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const progressDownstreamTasksImpl = vi.fn();
+    const applyDynamicExpansionImpl = vi.fn(async () => ({
+      ok: false as const,
+      reason: "INVALID_DYNAMIC_SPAWN_EDGE",
+      message: "bad edge",
+    }));
+
+    const result = await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute: vi.fn(async () => ({
+            ok: true as const,
+            output: {
+              orchestration: {
+                spawn: {
+                  tasks: [
+                    {
+                      taskKey: "dynamic-task-1",
+                      title: "Dynamic Task",
+                      payload: {},
+                      retryCount: 0,
+                    },
+                  ],
+                },
+              },
+            },
+          })),
+        },
+      },
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+        randomUUIDImpl: () => "run-1",
+        applyDynamicExpansionImpl,
+        progressDownstreamTasksImpl,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      task: {
+        status: "succeeded",
+      },
+    });
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "failed",
+    });
+    expect(progressDownstreamTasksImpl).not.toHaveBeenCalled();
+  });
+
   it("treats missing loop output as exit and keeps normal downstream progression", async () => {
     const task = createTask("review-1", "workflow-1", {
       assigneeAgentId: "agent-1",
@@ -551,6 +707,69 @@ describe("executeTaskLifecycle", () => {
     );
 
     expect(progressDownstreamTasksImpl).toHaveBeenCalledTimes(1);
+    expect(expandLoopIterationImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails the workflow when a loop controller output mixes loop and spawn directives", async () => {
+    const task = createTask("review-1", "workflow-1", {
+      assigneeAgentId: "agent-1",
+      taskTemplateId: "review-template",
+      loopDefinitionId: "loop-1",
+      iteration: 1,
+    });
+    const workflow = createWorkflow("workflow-1", {
+      workflowDefinitionId: "workflow-definition-1",
+    });
+    const agent = createAgent("agent-1");
+    const loopDefinition = createLoopDefinition("workflow-definition-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+      loopDefinition,
+    });
+    const progressDownstreamTasksImpl = vi.fn();
+    const expandLoopIterationImpl = vi.fn();
+
+    await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute: vi.fn(async () => ({
+            ok: true as const,
+            output: {
+              loopAction: "exit",
+              orchestration: {
+                spawn: {
+                  tasks: [
+                    {
+                      taskKey: "dynamic-task-1",
+                      title: "Dynamic Task",
+                      payload: {},
+                      retryCount: 0,
+                    },
+                  ],
+                },
+              },
+            },
+          })),
+        },
+      },
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+        randomUUIDImpl: () => "run-1",
+        progressDownstreamTasksImpl,
+        expandLoopIterationImpl,
+      },
+    );
+
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "failed",
+    });
+    expect(progressDownstreamTasksImpl).not.toHaveBeenCalled();
     expect(expandLoopIterationImpl).not.toHaveBeenCalled();
   });
 
@@ -643,6 +862,140 @@ describe("executeTaskLifecycle", () => {
     expect(progressDownstreamTasksImpl).not.toHaveBeenCalled();
     expect(state.workflows.get("workflow-1")).toMatchObject({
       status: "running",
+    });
+  });
+
+  it("allows recursive dynamic spawn across multiple task completions", async () => {
+    const task = createTask("task-a", "workflow-1", {
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "running" });
+    const agent = createAgent("agent-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const enqueuePort = createEnqueuePort();
+    const registry: ExecutableAdapterRegistry = {
+      cli: {
+        runtimeType: "cli",
+        execute: vi.fn(async (currentTask: Task) => {
+          if (currentTask.taskId === "task-a") {
+            return {
+              ok: true as const,
+              output: {
+                orchestration: {
+                  spawn: {
+                    tasks: [
+                      {
+                        taskKey: "task-b",
+                        title: "Task B",
+                        payload: {},
+                        defaultAssigneeAgentId: "agent-1",
+                        retryCount: 0,
+                      },
+                    ],
+                    edges: [
+                      {
+                        from: "task-a",
+                        to: "task-b",
+                      },
+                    ],
+                  },
+                },
+              },
+            };
+          }
+
+          if (currentTask.taskId === "task-b") {
+            return {
+              ok: true as const,
+              output: {
+                orchestration: {
+                  spawn: {
+                    tasks: [
+                      {
+                        taskKey: "task-c",
+                        title: "Task C",
+                        payload: {},
+                        defaultAssigneeAgentId: "agent-1",
+                        retryCount: 0,
+                      },
+                    ],
+                    edges: [
+                      {
+                        from: "task-b",
+                        to: "task-c",
+                      },
+                    ],
+                  },
+                },
+              },
+            };
+          }
+
+          return {
+            ok: true as const,
+            output: {},
+          };
+        }),
+      },
+    };
+
+    await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      registry,
+      enqueuePort,
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+        randomUUIDImpl: vi
+          .fn()
+          .mockReturnValueOnce("run-1")
+          .mockReturnValueOnce("task-b"),
+      },
+    );
+
+    expect(state.tasks.get("task-b")).toMatchObject({
+      status: "queued",
+      spawnedFromTaskId: "task-a",
+      generationSource: "dynamic",
+    });
+
+    await executeTaskLifecycle(
+      createPayload(state.tasks.get("task-b")!),
+      repositories,
+      registry,
+      enqueuePort,
+      {
+        now: () => "2026-03-15T00:10:00.000Z",
+        randomUUIDImpl: vi
+          .fn()
+          .mockReturnValueOnce("run-2")
+          .mockReturnValueOnce("task-c"),
+      },
+    );
+
+    expect(state.tasks.get("task-c")).toMatchObject({
+      status: "queued",
+      spawnedFromTaskId: "task-b",
+      generationSource: "dynamic",
+    });
+
+    await executeTaskLifecycle(
+      createPayload(state.tasks.get("task-c")!),
+      repositories,
+      registry,
+      enqueuePort,
+      {
+        now: () => "2026-03-15T00:15:00.000Z",
+        randomUUIDImpl: () => "run-3",
+      },
+    );
+
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "succeeded",
     });
   });
 });

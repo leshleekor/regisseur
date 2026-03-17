@@ -24,6 +24,15 @@ export const TASK_EDGE_TYPES = ["depends_on"] as const;
  */
 export type TaskEdgeType = (typeof TASK_EDGE_TYPES)[number];
 
+export const TASK_GENERATION_SOURCES = [
+  "definition",
+  "loop",
+  "dynamic",
+] as const;
+
+/** Supported provenance sources for runtime task creation. */
+export type TaskGenerationSource = (typeof TASK_GENERATION_SOURCES)[number];
+
 /**
  * Task represents the smallest executable unit in a workflow graph.
  */
@@ -56,6 +65,8 @@ export interface Task {
    * task during loop expansion.
    */
   spawnedFromTaskId?: string;
+  /** Optional provenance source for how this runtime task was created. */
+  generationSource?: TaskGenerationSource;
   /** Optional logical lock key used to prevent concurrent execution clashes. */
   concurrencyKey?: string;
   /** Creation timestamp recorded when the task is first persisted. */

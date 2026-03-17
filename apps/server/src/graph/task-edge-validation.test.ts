@@ -45,6 +45,7 @@ function createRepositories(options: {
         ),
       ),
       findByStatus: vi.fn(async () => []),
+      countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       upsert: vi.fn(async () => undefined),
       deleteById: vi.fn(async () => undefined),
     },

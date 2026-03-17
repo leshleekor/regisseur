@@ -26,6 +26,7 @@ export class PostgresTasksRepository {
           loop_definition_id,
           iteration,
           spawned_from_task_id,
+          generation_source,
           concurrency_key,
           metadata,
           created_at,
@@ -43,9 +44,10 @@ export class PostgresTasksRepository {
           $10,
           $11,
           $12,
-          $13::jsonb,
-          $14::timestamptz,
-          $15::timestamptz
+          $13,
+          $14::jsonb,
+          $15::timestamptz,
+          $16::timestamptz
         )
       `,
       [
@@ -60,6 +62,7 @@ export class PostgresTasksRepository {
         row.loop_definition_id,
         row.iteration,
         row.spawned_from_task_id,
+        row.generation_source,
         row.concurrency_key,
         row.metadata,
         row.created_at,
@@ -85,6 +88,7 @@ export class PostgresTasksRepository {
           loop_definition_id,
           iteration,
           spawned_from_task_id,
+          generation_source,
           concurrency_key,
           metadata,
           created_at,
@@ -102,9 +106,10 @@ export class PostgresTasksRepository {
           $10,
           $11,
           $12,
-          $13::jsonb,
-          $14::timestamptz,
-          $15::timestamptz
+          $13,
+          $14::jsonb,
+          $15::timestamptz,
+          $16::timestamptz
         )
         ON CONFLICT (task_id) DO UPDATE SET
           workflow_id = EXCLUDED.workflow_id,
@@ -117,6 +122,7 @@ export class PostgresTasksRepository {
           loop_definition_id = EXCLUDED.loop_definition_id,
           iteration = EXCLUDED.iteration,
           spawned_from_task_id = EXCLUDED.spawned_from_task_id,
+          generation_source = EXCLUDED.generation_source,
           concurrency_key = EXCLUDED.concurrency_key,
           metadata = EXCLUDED.metadata,
           updated_at = EXCLUDED.updated_at
@@ -133,6 +139,7 @@ export class PostgresTasksRepository {
         row.loop_definition_id,
         row.iteration,
         row.spawned_from_task_id,
+        row.generation_source,
         row.concurrency_key,
         row.metadata,
         row.created_at,
@@ -166,6 +173,23 @@ export class PostgresTasksRepository {
     );
 
     return result.rows.map(mapTaskRowToDomain);
+  }
+
+  async countByWorkflowIdAndGenerationSource(
+    workflowId: string,
+    source: NonNullable<Task["generationSource"]>,
+  ): Promise<number> {
+    const result = await this.db.query<{ count: string }>(
+      `
+        SELECT COUNT(*)::text AS count
+        FROM tasks
+        WHERE workflow_id = $1
+          AND generation_source = $2
+      `,
+      [workflowId, source],
+    );
+
+    return Number(result.rows[0]?.count ?? "0");
   }
 
   async findReadyTasks(): Promise<Task[]> {

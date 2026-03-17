@@ -99,6 +99,7 @@ describe("updateWorkflowStatus", () => {
       },
       tasksRepository: {
         findByWorkflowId: vi.fn(async () => tasks),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
     };
 
@@ -132,6 +133,7 @@ describe("updateWorkflowStatus", () => {
         findByWorkflowId: vi.fn(async () => [
           createTask("task-1", "workflow-1", { status: "running" }),
         ]),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
     };
 
@@ -157,6 +159,7 @@ describe("updateWorkflowStatus", () => {
           createTask("task-1", "workflow-1", { status: "succeeded" }),
           createTask("task-2", "workflow-1", { status: "blocked" }),
         ]),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
       },
     };
 

@@ -354,6 +354,7 @@ describe.sequential("store-postgres integration", () => {
             "idx_tasks_loop_definition_id",
             "idx_tasks_iteration",
             "idx_tasks_spawned_from_task_id",
+            "idx_tasks_generation_source",
             "idx_task_edges_to_task_id",
             "idx_task_edges_from_task_id",
             "idx_workflow_definitions_enabled",
@@ -391,6 +392,7 @@ describe.sequential("store-postgres integration", () => {
         "idx_task_templates_default_assignee_agent_id",
         "idx_task_templates_workflow_definition_id",
         "idx_tasks_assignee_agent_id",
+        "idx_tasks_generation_source",
         "idx_tasks_iteration",
         "idx_tasks_loop_definition_id",
         "idx_tasks_spawned_from_task_id",
@@ -795,11 +797,50 @@ describe.sequential("store-postgres integration", () => {
         loopDefinitionId: "loop-workflow-definition-1",
         iteration: 2,
         spawnedFromTaskId: "task-source",
+        generationSource: "loop",
       });
 
       await tasksRepository.insert(task);
 
       expect(await tasksRepository.findById("task-1")).toEqual(task);
+    });
+
+    it("counts tasks by workflow and generation source", async () => {
+      await workflowsRepository.insert(createWorkflow("workflow-1"));
+      await workflowsRepository.insert(createWorkflow("workflow-2"));
+      await tasksRepository.insert(
+        createTask("task-definition", "workflow-1", {
+          generationSource: "definition",
+        }),
+      );
+      await tasksRepository.insert(
+        createTask("task-dynamic-1", "workflow-1", {
+          generationSource: "dynamic",
+        }),
+      );
+      await tasksRepository.insert(
+        createTask("task-dynamic-2", "workflow-1", {
+          generationSource: "dynamic",
+        }),
+      );
+      await tasksRepository.insert(
+        createTask("task-other-workflow", "workflow-2", {
+          generationSource: "dynamic",
+        }),
+      );
+
+      expect(
+        await tasksRepository.countByWorkflowIdAndGenerationSource(
+          "workflow-1",
+          "dynamic",
+        ),
+      ).toBe(2);
+      expect(
+        await tasksRepository.countByWorkflowIdAndGenerationSource(
+          "workflow-1",
+          "definition",
+        ),
+      ).toBe(1);
     });
 
     it("finds tasks by workflow, status, and ready state in created_at ascending order", async () => {
@@ -1453,6 +1494,7 @@ describe.sequential("store-postgres integration", () => {
         loop_definition_id: "loop-1",
         iteration: 2,
         spawned_from_task_id: "task-parent-1",
+        generation_source: "dynamic",
         concurrency_key: null,
         metadata: { priority: "high" },
         created_at: "2026-03-15T00:00:00.000Z",
@@ -1478,6 +1520,7 @@ describe.sequential("store-postgres integration", () => {
       expect(task.loopDefinitionId).toBe("loop-1");
       expect(task.iteration).toBe(2);
       expect(task.spawnedFromTaskId).toBe("task-parent-1");
+      expect(task.generationSource).toBe("dynamic");
       expect(task.metadata).toEqual({ priority: "high" });
       expect(run.output).toEqual({ value: "ok" });
     });
@@ -1591,6 +1634,7 @@ describe.sequential("store-postgres integration", () => {
         loop_definition_id: null,
         iteration: null,
         spawned_from_task_id: null,
+        generation_source: null,
         concurrency_key: null,
         metadata: null,
         created_at: "2026-03-15T00:00:00.000Z",

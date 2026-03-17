@@ -93,6 +93,7 @@ describe("createScheduleTriggerProcessor", () => {
           }),
           findByWorkflowId: vi.fn(async () => Array.from(tasks.values())),
           findByStatus: vi.fn(async () => []),
+          countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
           findById: vi.fn(async (taskId: string) => tasks.get(taskId) ?? null),
           deleteById: vi.fn(async () => undefined),
         },

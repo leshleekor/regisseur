@@ -67,6 +67,7 @@ export interface TaskRow extends QueryResultRow {
   loop_definition_id: string | null;
   iteration: number | null;
   spawned_from_task_id: string | null;
+  generation_source: string | null;
   concurrency_key: string | null;
   metadata: unknown | null;
   created_at: TimestampValue;
@@ -180,6 +181,7 @@ export interface TaskRowInput {
   loop_definition_id: string | null;
   iteration: number | null;
   spawned_from_task_id: string | null;
+  generation_source: string | null;
   concurrency_key: string | null;
   metadata: string | null;
   created_at: string;

@@ -236,6 +236,15 @@ function createTestContext(): TestContext {
       (task) => task.status === status,
     );
   });
+  const tasksCountByWorkflowIdAndGenerationSource = vi.fn(
+    async (workflowId: string, source: Task["generationSource"]) => {
+      callLog.push("tasks.countByWorkflowIdAndGenerationSource");
+      return Array.from(state.tasks.values()).filter(
+        (task) =>
+          task.workflowId === workflowId && task.generationSource === source,
+      ).length;
+    },
+  );
   const tasksFindById = vi.fn(async (taskId: string) => {
     callLog.push("tasks.findById");
     return state.tasks.get(taskId) ?? null;
@@ -519,6 +528,8 @@ function createTestContext(): TestContext {
     upsert: tasksUpsert,
     findByWorkflowId: tasksFindByWorkflowId,
     findByStatus: tasksFindByStatus,
+    countByWorkflowIdAndGenerationSource:
+      tasksCountByWorkflowIdAndGenerationSource,
     findById: tasksFindById,
     deleteById: tasksDeleteById,
   };
@@ -1075,6 +1086,33 @@ describe("server app", () => {
       expect(responseJson<Workflow>(response).workflowId).toBe("workflow-1");
     });
 
+    it("GET /workflows/:workflowId/tasks returns runtime tasks for the workflow", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
+      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.tasks.set(
+        "task-2",
+        createTask("task-2", "workflow-1", {
+          generationSource: "dynamic",
+        }),
+      );
+      ctx.state.tasks.set("task-3", createTask("task-3", "workflow-2"));
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/workflows/workflow-1/tasks",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson<Task[]>(response).map((task) => task.taskId)).toEqual(
+        ["task-1", "task-2"],
+      );
+      expect(ctx.spies.tasks.findByWorkflowId).toHaveBeenCalledWith(
+        "workflow-1",
+      );
+    });
+
     it("GET /workflows/:workflowId returns 404 when missing", async () => {
       const ctx = createTestContext();
       app = buildApp(ctx.deps);
@@ -1082,6 +1120,18 @@ describe("server app", () => {
       const response = await app.inject({
         method: "GET",
         url: "/workflows/missing",
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("GET /workflows/:workflowId/tasks returns 404 when workflow is missing", async () => {
+      const ctx = createTestContext();
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/workflows/missing/tasks",
       });
 
       expect(response.statusCode).toBe(404);

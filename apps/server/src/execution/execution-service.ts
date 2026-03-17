@@ -16,6 +16,10 @@ import type {
   WorkflowsRepositoryLike,
 } from "../types.js";
 import { getExecutionAdapter } from "./adapter-registry.js";
+import {
+  applyDynamicExpansion,
+  parseDynamicSpawnDirective,
+} from "./dynamic-expansion.js";
 import { expandLoopIteration } from "./loop-expansion.js";
 import { progressDownstreamTasks } from "./graph-progression.js";
 import { updateWorkflowStatus } from "./workflow-status.js";
@@ -34,6 +38,7 @@ export interface ExecutionServiceRepositories {
 export interface ExecuteTaskLifecycleOptions {
   now?: () => string;
   randomUUIDImpl?: () => string;
+  applyDynamicExpansionImpl?: typeof applyDynamicExpansion;
   expandLoopIterationImpl?: typeof expandLoopIteration;
   progressDownstreamTasksImpl?: typeof progressDownstreamTasks;
   updateWorkflowStatusImpl?: typeof updateWorkflowStatus;
@@ -164,6 +169,8 @@ export async function executeTaskLifecycle(
 ): Promise<ExecuteTaskLifecycleResult> {
   const now = options.now ?? (() => new Date().toISOString());
   const createRunId = options.randomUUIDImpl ?? randomUUID;
+  const applyDynamicExpansionImpl =
+    options.applyDynamicExpansionImpl ?? applyDynamicExpansion;
   const expandLoopIterationImpl =
     options.expandLoopIterationImpl ?? expandLoopIteration;
   const progressDownstreamTasksImpl =
@@ -293,6 +300,9 @@ export async function executeTaskLifecycle(
     succeededTask,
     repositories,
   );
+  const dynamicSpawnDirectiveResult = parseDynamicSpawnDirective(
+    executionResult.output,
+  );
 
   if (!workflow) {
     return {
@@ -302,7 +312,51 @@ export async function executeTaskLifecycle(
     };
   }
 
+  if (!dynamicSpawnDirectiveResult.ok) {
+    await repositories.workflowsRepository.upsert({
+      ...workflow,
+      status: "failed",
+      updatedAt: now(),
+    });
+
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
+
+  const dynamicSpawnDirective = dynamicSpawnDirectiveResult.directive;
+
   if (!controllerLoopDefinition) {
+    if (dynamicSpawnDirective !== null) {
+      const dynamicExpansionResult = await applyDynamicExpansionImpl(
+        succeededTask,
+        workflow,
+        dynamicSpawnDirective,
+        repositories,
+        enqueuePort,
+        {
+          now,
+          randomUUIDImpl: createRunId,
+        },
+      );
+
+      if (!dynamicExpansionResult.ok) {
+        await repositories.workflowsRepository.upsert({
+          ...workflow,
+          status: "failed",
+          updatedAt: now(),
+        });
+
+        return {
+          ok: true,
+          run: succeededRun,
+          task: succeededTask,
+        };
+      }
+    }
+
     await progressDownstreamTasksImpl(
       succeededTask,
       repositories,
@@ -321,6 +375,20 @@ export async function executeTaskLifecycle(
   }
 
   const loopAction = resolveLoopAction(executionResult.output);
+
+  if (dynamicSpawnDirective !== null) {
+    await repositories.workflowsRepository.upsert({
+      ...workflow,
+      status: "failed",
+      updatedAt: now(),
+    });
+
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
 
   if (loopAction === "repeat") {
     const expansionResult = await expandLoopIterationImpl(

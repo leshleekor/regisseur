@@ -42,6 +42,18 @@ export function registerWorkflowRoutes(
     return workflow;
   });
 
+  app.get("/workflows/:workflowId/tasks", async (request) => {
+    const params = expectRecord(request.params, "params");
+    const workflowId = expectString(params.workflowId, "workflowId");
+    const workflow = await deps.workflowsRepository.findById(workflowId);
+
+    if (!workflow) {
+      throw notFound(`Workflow ${workflowId} not found`);
+    }
+
+    return deps.tasksRepository.findByWorkflowId(workflowId);
+  });
+
   app.delete("/workflows/:workflowId", async (request, reply) => {
     const params = expectRecord(request.params, "params");
     const workflowId = expectString(params.workflowId, "workflowId");

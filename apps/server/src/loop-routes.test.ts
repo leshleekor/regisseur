@@ -69,6 +69,7 @@ function createDependencies() {
         upsert: vi.fn(async () => undefined),
         findByWorkflowId: vi.fn(async () => [] as Task[]),
         findByStatus: vi.fn(async () => [] as Task[]),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
         findById: vi.fn(async () => null),
         deleteById: vi.fn(async () => undefined),
       },

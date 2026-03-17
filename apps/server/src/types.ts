@@ -8,6 +8,7 @@ import type {
   ScheduleTargetType,
   Task,
   TaskEdge,
+  TaskGenerationSource,
   TaskTemplate,
   TaskTemplateEdge,
   TaskStatus,
@@ -46,6 +47,10 @@ export interface TasksRepositoryLike {
   upsert(task: Task): Promise<void>;
   findByWorkflowId(workflowId: string): Promise<Task[]>;
   findByStatus(status: TaskStatus): Promise<Task[]>;
+  countByWorkflowIdAndGenerationSource(
+    workflowId: string,
+    source: TaskGenerationSource,
+  ): Promise<number>;
   findById(taskId: string): Promise<Task | null>;
   deleteById(taskId: string): Promise<void>;
 }

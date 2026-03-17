@@ -120,6 +120,7 @@ function createRuntimeTask(
       : {}),
     retryCount: taskTemplate.retryCount,
     taskTemplateId: taskTemplate.taskTemplateId,
+    generationSource: "definition",
     ...(loopDefinitionId !== undefined ? { loopDefinitionId } : {}),
     ...(iteration !== undefined ? { iteration } : {}),
     ...(taskTemplate.concurrencyKey !== undefined

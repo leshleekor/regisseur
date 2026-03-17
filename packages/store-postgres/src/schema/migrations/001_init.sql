@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   loop_definition_id TEXT NULL REFERENCES loop_definitions(loop_definition_id),
   iteration INTEGER NULL,
   spawned_from_task_id TEXT NULL REFERENCES tasks(task_id),
+  generation_source TEXT NULL,
   concurrency_key TEXT NULL,
   metadata JSONB NULL,
   created_at TIMESTAMPTZ NOT NULL,
@@ -149,6 +150,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_iteration
 
 CREATE INDEX IF NOT EXISTS idx_tasks_spawned_from_task_id
   ON tasks (spawned_from_task_id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_generation_source
+  ON tasks (generation_source);
 
 CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_key
   ON tasks (concurrency_key);
