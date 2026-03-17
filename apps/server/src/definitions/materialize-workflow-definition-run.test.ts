@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Task,
   TaskEdge,
   TaskTemplate,
@@ -68,10 +69,29 @@ function createTaskTemplateEdge(
   };
 }
 
+function createLoopDefinition(
+  workflowDefinitionId: string,
+  overrides: Partial<LoopDefinition> = {},
+): LoopDefinition {
+  return {
+    loopDefinitionId: "loop-1",
+    workflowDefinitionId,
+    name: "Review Loop",
+    controllerTaskTemplateId: "review-template",
+    entryTaskTemplateIds: ["dev-template"],
+    bodyTaskTemplateIds: ["dev-template", "review-template"],
+    maxIterations: 3,
+    createdAt: "2026-03-16T00:00:00.000Z",
+    updatedAt: "2026-03-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function createRepositories(options: {
   workflowDefinitions?: readonly WorkflowDefinition[];
   taskTemplates?: readonly TaskTemplate[];
   taskTemplateEdges?: readonly TaskTemplateEdge[];
+  loopDefinitions?: readonly LoopDefinition[];
   agents?: readonly AgentDefinition[];
 }) {
   const workflowDefinitions = new Map(
@@ -87,6 +107,12 @@ function createRepositories(options: {
     ]),
   );
   const taskTemplateEdges = [...(options.taskTemplateEdges ?? [])];
+  const loopDefinitions = new Map(
+    (options.loopDefinitions ?? []).map((loopDefinition) => [
+      loopDefinition.loopDefinitionId,
+      loopDefinition,
+    ]),
+  );
   const agents = new Map(
     (options.agents ?? []).map((agent) => [agent.agentId, agent]),
   );
@@ -97,6 +123,7 @@ function createRepositories(options: {
   return {
     state: {
       workflowDefinitions,
+      loopDefinitions,
       taskTemplates,
       taskTemplateEdges,
       workflows,
@@ -176,6 +203,23 @@ function createRepositories(options: {
         findById: vi.fn(
           async (workflowDefinitionId: string) =>
             workflowDefinitions.get(workflowDefinitionId) ?? null,
+        ),
+        deleteById: vi.fn(async () => undefined),
+      },
+      loopDefinitionsRepository: {
+        upsert: vi.fn(async (loopDefinition: LoopDefinition) => {
+          loopDefinitions.set(loopDefinition.loopDefinitionId, loopDefinition);
+        }),
+        findByWorkflowDefinitionId: vi.fn(
+          async (workflowDefinitionId: string) =>
+            Array.from(loopDefinitions.values()).find(
+              (loopDefinition) =>
+                loopDefinition.workflowDefinitionId === workflowDefinitionId,
+            ) ?? null,
+        ),
+        findById: vi.fn(
+          async (loopDefinitionId: string) =>
+            loopDefinitions.get(loopDefinitionId) ?? null,
         ),
         deleteById: vi.fn(async () => undefined),
       },
@@ -361,6 +405,83 @@ describe("materializeWorkflowDefinitionRun", () => {
       triggerSource: "schedule",
       triggeredByScheduleId: "schedule-1",
     });
+  });
+
+  it("stores loop provenance on iteration 1 materialized body tasks", async () => {
+    const workflowDefinition = createWorkflowDefinition(
+      "workflow-definition-1",
+    );
+    const devTemplate = createTaskTemplate(
+      "dev-template",
+      workflowDefinition.workflowDefinitionId,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const reviewTemplate = createTaskTemplate(
+      "review-template",
+      workflowDefinition.workflowDefinitionId,
+    );
+    const deployTemplate = createTaskTemplate(
+      "deploy-template",
+      workflowDefinition.workflowDefinitionId,
+    );
+    const { repositories, state } = createRepositories({
+      workflowDefinitions: [workflowDefinition],
+      loopDefinitions: [
+        createLoopDefinition(workflowDefinition.workflowDefinitionId),
+      ],
+      taskTemplates: [devTemplate, reviewTemplate, deployTemplate],
+      taskTemplateEdges: [
+        createTaskTemplateEdge(
+          devTemplate.taskTemplateId,
+          reviewTemplate.taskTemplateId,
+        ),
+        createTaskTemplateEdge(
+          reviewTemplate.taskTemplateId,
+          deployTemplate.taskTemplateId,
+        ),
+      ],
+      agents: [createAgent("agent-1")],
+    });
+
+    await materializeWorkflowDefinitionRun(
+      workflowDefinition.workflowDefinitionId,
+      repositories,
+      {
+        enqueueTaskDispatch: vi.fn(async () => ({
+          ok: true as const,
+          jobId: "job-1",
+        })),
+      },
+      {
+        triggerSource: "manual",
+        now: () => "2026-03-16T00:00:00.000Z",
+        randomUUIDImpl: vi
+          .fn()
+          .mockReturnValueOnce("workflow-runtime-1")
+          .mockReturnValueOnce("task-runtime-dev-1")
+          .mockReturnValueOnce("task-runtime-review-1")
+          .mockReturnValueOnce("task-runtime-deploy-1"),
+      },
+    );
+
+    expect(state.tasks.get("task-runtime-dev-1")).toMatchObject({
+      taskTemplateId: "dev-template",
+      loopDefinitionId: "loop-1",
+      iteration: 1,
+    });
+    expect(state.tasks.get("task-runtime-review-1")).toMatchObject({
+      taskTemplateId: "review-template",
+      loopDefinitionId: "loop-1",
+      iteration: 1,
+    });
+    expect(state.tasks.get("task-runtime-deploy-1")).toMatchObject({
+      taskTemplateId: "deploy-template",
+    });
+    expect(state.tasks.get("task-runtime-deploy-1")).not.toHaveProperty(
+      "loopDefinitionId",
+    );
   });
 
   it("fails when the workflow definition is missing", async () => {

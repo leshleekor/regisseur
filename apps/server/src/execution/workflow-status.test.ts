@@ -144,4 +144,29 @@ describe("updateWorkflowStatus", () => {
     expect(updatedWorkflow).toBe(workflow);
     expect(repositories.workflowsRepository.upsert).not.toHaveBeenCalled();
   });
+
+  it("preserves failed workflow status as terminal even when task aggregate is non-failed", async () => {
+    const workflow = createWorkflow("workflow-1", { status: "failed" });
+    const repositories = {
+      workflowsRepository: {
+        findById: vi.fn(async () => workflow),
+        upsert: vi.fn(async () => undefined),
+      },
+      tasksRepository: {
+        findByWorkflowId: vi.fn(async () => [
+          createTask("task-1", "workflow-1", { status: "succeeded" }),
+          createTask("task-2", "workflow-1", { status: "blocked" }),
+        ]),
+      },
+    };
+
+    const updatedWorkflow = await updateWorkflowStatus(
+      workflow.workflowId,
+      repositories,
+      "2026-03-15T00:05:00.000Z",
+    );
+
+    expect(updatedWorkflow).toBe(workflow);
+    expect(repositories.workflowsRepository.upsert).not.toHaveBeenCalled();
+  });
 });

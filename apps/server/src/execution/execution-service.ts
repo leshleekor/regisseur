@@ -1,18 +1,22 @@
 import { randomUUID } from "node:crypto";
 
-import type { Run, Task } from "@regisseur/core";
+import type { LoopDefinition, Run, Task } from "@regisseur/core";
 import type { TaskDispatchJobPayload } from "@regisseur/queue-bullmq";
 import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 
 import type {
   AgentsRepositoryLike,
   ExecutableAdapterRegistry,
+  LoopDefinitionsRepositoryLike,
   RunsRepositoryLike,
   TaskEdgesRepositoryLike,
+  TaskTemplateEdgesRepositoryLike,
+  TaskTemplatesRepositoryLike,
   TasksRepositoryLike,
   WorkflowsRepositoryLike,
 } from "../types.js";
 import { getExecutionAdapter } from "./adapter-registry.js";
+import { expandLoopIteration } from "./loop-expansion.js";
 import { progressDownstreamTasks } from "./graph-progression.js";
 import { updateWorkflowStatus } from "./workflow-status.js";
 
@@ -22,11 +26,15 @@ export interface ExecutionServiceRepositories {
   taskEdgesRepository: TaskEdgesRepositoryLike;
   tasksRepository: TasksRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
+  loopDefinitionsRepository: LoopDefinitionsRepositoryLike;
+  taskTemplatesRepository: TaskTemplatesRepositoryLike;
+  taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
 }
 
 export interface ExecuteTaskLifecycleOptions {
   now?: () => string;
   randomUUIDImpl?: () => string;
+  expandLoopIterationImpl?: typeof expandLoopIteration;
   progressDownstreamTasksImpl?: typeof progressDownstreamTasks;
   updateWorkflowStatusImpl?: typeof updateWorkflowStatus;
   logError?: (message: string) => void;
@@ -63,6 +71,33 @@ function createRunForExecution(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function resolveLoopAction(
+  output: Record<string, unknown> | undefined,
+): "repeat" | "exit" {
+  return output?.loopAction === "repeat" ? "repeat" : "exit";
+}
+
+async function findControllerLoopDefinition(
+  task: Task,
+  repositories: Pick<ExecutionServiceRepositories, "loopDefinitionsRepository">,
+): Promise<LoopDefinition | null> {
+  if (!task.loopDefinitionId || !task.taskTemplateId) {
+    return null;
+  }
+
+  const loopDefinition = await repositories.loopDefinitionsRepository.findById(
+    task.loopDefinitionId,
+  );
+
+  if (!loopDefinition) {
+    return null;
+  }
+
+  return loopDefinition.controllerTaskTemplateId === task.taskTemplateId
+    ? loopDefinition
+    : null;
 }
 
 async function persistFailedTaskWithoutRun(
@@ -129,6 +164,8 @@ export async function executeTaskLifecycle(
 ): Promise<ExecuteTaskLifecycleResult> {
   const now = options.now ?? (() => new Date().toISOString());
   const createRunId = options.randomUUIDImpl ?? randomUUID;
+  const expandLoopIterationImpl =
+    options.expandLoopIterationImpl ?? expandLoopIteration;
   const progressDownstreamTasksImpl =
     options.progressDownstreamTasksImpl ?? progressDownstreamTasks;
   const updateWorkflowStatusImpl =
@@ -249,10 +286,82 @@ export async function executeTaskLifecycle(
 
   await repositories.runsRepository.upsert(succeededRun);
   await repositories.tasksRepository.upsert(succeededTask);
-  await updateWorkflowStatusImpl(task.workflowId, repositories, now());
+  const workflow = await repositories.workflowsRepository.findById(
+    task.workflowId,
+  );
+  const controllerLoopDefinition = await findControllerLoopDefinition(
+    succeededTask,
+    repositories,
+  );
+
+  if (!workflow) {
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
+
+  if (!controllerLoopDefinition) {
+    await progressDownstreamTasksImpl(
+      succeededTask,
+      repositories,
+      enqueuePort,
+      {
+        now,
+      },
+    );
+    await updateWorkflowStatusImpl(task.workflowId, repositories, now());
+
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
+
+  const loopAction = resolveLoopAction(executionResult.output);
+
+  if (loopAction === "repeat") {
+    const expansionResult = await expandLoopIterationImpl(
+      succeededTask,
+      controllerLoopDefinition,
+      workflow,
+      repositories,
+      enqueuePort,
+      {
+        now,
+        randomUUIDImpl: createRunId,
+      },
+    );
+
+    if (!expansionResult.ok) {
+      await repositories.workflowsRepository.upsert({
+        ...workflow,
+        status: "failed",
+        updatedAt: now(),
+      });
+
+      return {
+        ok: true,
+        run: succeededRun,
+        task: succeededTask,
+      };
+    }
+
+    await updateWorkflowStatusImpl(task.workflowId, repositories, now());
+
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
+
   await progressDownstreamTasksImpl(succeededTask, repositories, enqueuePort, {
     now,
   });
+  await updateWorkflowStatusImpl(task.workflowId, repositories, now());
 
   return {
     ok: true,

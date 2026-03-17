@@ -23,6 +23,9 @@ export class PostgresTasksRepository {
           assignee_agent_id,
           retry_count,
           task_template_id,
+          loop_definition_id,
+          iteration,
+          spawned_from_task_id,
           concurrency_key,
           metadata,
           created_at,
@@ -37,9 +40,12 @@ export class PostgresTasksRepository {
           $7,
           $8,
           $9,
-          $10::jsonb,
-          $11::timestamptz,
-          $12::timestamptz
+          $10,
+          $11,
+          $12,
+          $13::jsonb,
+          $14::timestamptz,
+          $15::timestamptz
         )
       `,
       [
@@ -51,6 +57,9 @@ export class PostgresTasksRepository {
         row.assignee_agent_id,
         row.retry_count,
         row.task_template_id,
+        row.loop_definition_id,
+        row.iteration,
+        row.spawned_from_task_id,
         row.concurrency_key,
         row.metadata,
         row.created_at,
@@ -73,6 +82,9 @@ export class PostgresTasksRepository {
           assignee_agent_id,
           retry_count,
           task_template_id,
+          loop_definition_id,
+          iteration,
+          spawned_from_task_id,
           concurrency_key,
           metadata,
           created_at,
@@ -87,9 +99,12 @@ export class PostgresTasksRepository {
           $7,
           $8,
           $9,
-          $10::jsonb,
-          $11::timestamptz,
-          $12::timestamptz
+          $10,
+          $11,
+          $12,
+          $13::jsonb,
+          $14::timestamptz,
+          $15::timestamptz
         )
         ON CONFLICT (task_id) DO UPDATE SET
           workflow_id = EXCLUDED.workflow_id,
@@ -99,6 +114,9 @@ export class PostgresTasksRepository {
           assignee_agent_id = EXCLUDED.assignee_agent_id,
           retry_count = EXCLUDED.retry_count,
           task_template_id = EXCLUDED.task_template_id,
+          loop_definition_id = EXCLUDED.loop_definition_id,
+          iteration = EXCLUDED.iteration,
+          spawned_from_task_id = EXCLUDED.spawned_from_task_id,
           concurrency_key = EXCLUDED.concurrency_key,
           metadata = EXCLUDED.metadata,
           updated_at = EXCLUDED.updated_at
@@ -112,6 +130,9 @@ export class PostgresTasksRepository {
         row.assignee_agent_id,
         row.retry_count,
         row.task_template_id,
+        row.loop_definition_id,
+        row.iteration,
+        row.spawned_from_task_id,
         row.concurrency_key,
         row.metadata,
         row.created_at,

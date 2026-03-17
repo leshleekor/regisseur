@@ -9,6 +9,7 @@ import {
 } from "../execution/dispatch-persistence.js";
 import type {
   AgentsRepositoryLike,
+  LoopDefinitionsRepositoryLike,
   SchedulesRepositoryLike,
   TaskEdgesRepositoryLike,
   TaskTemplateEdgesRepositoryLike,
@@ -27,6 +28,7 @@ export interface ScheduleTriggerRepositories {
   workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike;
   taskTemplatesRepository: TaskTemplatesRepositoryLike;
   taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
+  loopDefinitionsRepository: LoopDefinitionsRepositoryLike;
 }
 
 export interface HandleScheduleTriggerResult {
@@ -153,6 +155,7 @@ async function triggerScheduledWorkflow(
       workflowDefinitionsRepository: repositories.workflowDefinitionsRepository,
       taskTemplatesRepository: repositories.taskTemplatesRepository,
       taskTemplateEdgesRepository: repositories.taskTemplateEdgesRepository,
+      loopDefinitionsRepository: repositories.loopDefinitionsRepository,
     },
     enqueuePort,
     {

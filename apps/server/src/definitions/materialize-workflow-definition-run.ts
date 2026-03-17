@@ -16,6 +16,7 @@ import {
 } from "../execution/dispatch-persistence.js";
 import type {
   AgentsRepositoryLike,
+  LoopDefinitionsRepositoryLike,
   TaskEdgesRepositoryLike,
   TaskTemplateEdgesRepositoryLike,
   TaskTemplatesRepositoryLike,
@@ -33,6 +34,7 @@ export interface MaterializeWorkflowDefinitionRunRepositories {
   workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike;
   taskTemplatesRepository: TaskTemplatesRepositoryLike;
   taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
+  loopDefinitionsRepository: LoopDefinitionsRepositoryLike;
 }
 
 export interface MaterializeWorkflowDefinitionRunOptions {
@@ -104,6 +106,8 @@ function createRuntimeTask(
   taskTemplate: TaskTemplate,
   isRootTask: boolean,
   now: string,
+  loopDefinitionId?: string,
+  iteration?: number,
 ): Task {
   return {
     taskId,
@@ -116,6 +120,8 @@ function createRuntimeTask(
       : {}),
     retryCount: taskTemplate.retryCount,
     taskTemplateId: taskTemplate.taskTemplateId,
+    ...(loopDefinitionId !== undefined ? { loopDefinitionId } : {}),
+    ...(iteration !== undefined ? { iteration } : {}),
     ...(taskTemplate.concurrencyKey !== undefined
       ? { concurrencyKey: taskTemplate.concurrencyKey }
       : {}),
@@ -181,6 +187,10 @@ export async function materializeWorkflowDefinitionRun(
     await repositories.taskTemplateEdgesRepository.findAllByWorkflowDefinitionTaskTemplates(
       taskTemplates.map((taskTemplate) => taskTemplate.taskTemplateId),
     );
+  const loopDefinition =
+    await repositories.loopDefinitionsRepository.findByWorkflowDefinitionId(
+      workflowDefinitionId,
+    );
   const workflowId = runtimeId();
   const workflow = createRuntimeWorkflow(
     workflowId,
@@ -195,6 +205,9 @@ export async function materializeWorkflowDefinitionRun(
     taskTemplates,
     taskTemplateEdges,
   );
+  const loopBodyTaskTemplateIds = new Set(
+    loopDefinition?.bodyTaskTemplateIds ?? [],
+  );
   const taskIdByTemplateId = new Map<string, string>();
   const tasks = taskTemplates.map((taskTemplate) => {
     const taskId = runtimeId();
@@ -207,6 +220,10 @@ export async function materializeWorkflowDefinitionRun(
       taskTemplate,
       rootTaskTemplateIds.has(taskTemplate.taskTemplateId),
       materializedAt,
+      loopBodyTaskTemplateIds.has(taskTemplate.taskTemplateId)
+        ? loopDefinition?.loopDefinitionId
+        : undefined,
+      loopBodyTaskTemplateIds.has(taskTemplate.taskTemplateId) ? 1 : undefined,
     );
   });
   const taskEdges = taskTemplateEdges.map((taskTemplateEdge) =>

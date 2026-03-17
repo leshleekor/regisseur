@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Schedule,
   Task,
   TaskEdge,
@@ -125,6 +126,7 @@ function createRepositories(options: {
   workflowDefinitions?: readonly WorkflowDefinition[];
   taskTemplates?: readonly TaskTemplate[];
   taskTemplateEdges?: readonly TaskTemplateEdge[];
+  loopDefinitions?: readonly LoopDefinition[];
   agents?: readonly AgentDefinition[];
   edges?: readonly TaskEdge[];
   failScheduleDisable?: boolean;
@@ -157,6 +159,12 @@ function createRepositories(options: {
     ]),
   );
   const taskTemplateEdges = [...(options.taskTemplateEdges ?? [])];
+  const loopDefinitions = new Map(
+    (options.loopDefinitions ?? []).map((loopDefinition) => [
+      loopDefinition.loopDefinitionId,
+      loopDefinition,
+    ]),
+  );
   const agents = new Map(
     (options.agents ?? []).map((agent) => [agent.agentId, agent]),
   );
@@ -169,6 +177,7 @@ function createRepositories(options: {
       workflows,
       taskEdges: edges,
       workflowDefinitions,
+      loopDefinitions,
       taskTemplates,
       taskTemplateEdges,
     },
@@ -251,6 +260,23 @@ function createRepositories(options: {
         findById: vi.fn(
           async (workflowDefinitionId: string) =>
             workflowDefinitions.get(workflowDefinitionId) ?? null,
+        ),
+        deleteById: vi.fn(async () => undefined),
+      },
+      loopDefinitionsRepository: {
+        upsert: vi.fn(async (loopDefinition: LoopDefinition) => {
+          loopDefinitions.set(loopDefinition.loopDefinitionId, loopDefinition);
+        }),
+        findByWorkflowDefinitionId: vi.fn(
+          async (workflowDefinitionId: string) =>
+            Array.from(loopDefinitions.values()).find(
+              (loopDefinition) =>
+                loopDefinition.workflowDefinitionId === workflowDefinitionId,
+            ) ?? null,
+        ),
+        findById: vi.fn(
+          async (loopDefinitionId: string) =>
+            loopDefinitions.get(loopDefinitionId) ?? null,
         ),
         deleteById: vi.fn(async () => undefined),
       },

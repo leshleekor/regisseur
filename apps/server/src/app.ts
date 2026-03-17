@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { registerErrorHandler } from "./errors/error-handler.js";
 import { registerAgentRoutes } from "./routes/agents.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerLoopRoutes } from "./routes/loops.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerTaskEdgeRoutes } from "./routes/task-edges.js";
@@ -39,6 +40,7 @@ function assertServerDependencies(
     deps.taskTemplateEdgesRepository,
     "taskTemplateEdgesRepository",
   );
+  assertDependency(deps.loopDefinitionsRepository, "loopDefinitionsRepository");
   assertDependency(deps.schedulesRepository, "schedulesRepository");
   assertDependency(deps.runsRepository, "runsRepository");
   assertDependency(deps.enqueuePort, "enqueuePort");
@@ -60,6 +62,7 @@ export function buildApp(deps: Partial<ServerDependencies>): FastifyInstance {
   registerTaskEdgeRoutes(app, deps);
   registerTaskTemplateRoutes(app, deps);
   registerTaskTemplateEdgeRoutes(app, deps);
+  registerLoopRoutes(app, deps);
   registerScheduleRoutes(app, deps);
   registerRunRoutes(app, deps);
 

@@ -47,6 +47,15 @@ export interface Task {
   retryCount: number;
   /** Optional provenance back-reference to the template this task came from. */
   taskTemplateId?: string;
+  /** Optional loop provenance when the task belongs to an expanded iteration. */
+  loopDefinitionId?: string;
+  /** Optional iteration number for loop body tasks. */
+  iteration?: number;
+  /**
+   * Optional back-reference to the controller task that spawned this runtime
+   * task during loop expansion.
+   */
+  spawnedFromTaskId?: string;
   /** Optional logical lock key used to prevent concurrent execution clashes. */
   concurrencyKey?: string;
   /** Creation timestamp recorded when the task is first persisted. */

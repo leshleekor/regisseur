@@ -69,6 +69,7 @@ export function registerWorkflowDefinitionRoutes(
             workflowDefinitionsRepository: deps.workflowDefinitionsRepository,
             taskTemplatesRepository: deps.taskTemplatesRepository,
             taskTemplateEdgesRepository: deps.taskTemplateEdgesRepository,
+            loopDefinitionsRepository: deps.loopDefinitionsRepository,
           },
           deps.enqueuePort,
           {

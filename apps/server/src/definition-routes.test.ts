@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   Schedule,
   Task,
@@ -78,6 +79,7 @@ function createDependencies() {
   const tasks = new Map<string, Task>();
   const taskEdges: TaskEdge[] = [];
   const workflowDefinitions = new Map<string, WorkflowDefinition>();
+  const loopDefinitions = new Map<string, LoopDefinition>();
   const taskTemplates = new Map<string, TaskTemplate>();
   let taskTemplateEdges: TaskTemplateEdge[] = [];
   const schedules = new Map<string, Schedule>();
@@ -185,6 +187,25 @@ function createDependencies() {
       ),
       deleteById: vi.fn(async (workflowDefinitionId: string) => {
         workflowDefinitions.delete(workflowDefinitionId);
+      }),
+    },
+    loopDefinitionsRepository: {
+      upsert: vi.fn(async (loopDefinition: LoopDefinition) => {
+        loopDefinitions.set(loopDefinition.loopDefinitionId, loopDefinition);
+      }),
+      findByWorkflowDefinitionId: vi.fn(
+        async (workflowDefinitionId: string) =>
+          Array.from(loopDefinitions.values()).find(
+            (loopDefinition) =>
+              loopDefinition.workflowDefinitionId === workflowDefinitionId,
+          ) ?? null,
+      ),
+      findById: vi.fn(
+        async (loopDefinitionId: string) =>
+          loopDefinitions.get(loopDefinitionId) ?? null,
+      ),
+      deleteById: vi.fn(async (loopDefinitionId: string) => {
+        loopDefinitions.delete(loopDefinitionId);
       }),
     },
     taskTemplatesRepository: {

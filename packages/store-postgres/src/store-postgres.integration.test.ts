@@ -4,6 +4,7 @@ import { GenericContainer, Wait } from "testcontainers";
 import type { StartedTestContainer } from "testcontainers";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   Schedule,
   Task,
@@ -16,6 +17,7 @@ import type {
 
 import {
   PostgresAgentsRepository,
+  PostgresLoopDefinitionsRepository,
   PostgresRunsRepository,
   PostgresSchedulesRepository,
   PostgresTaskEdgesRepository,
@@ -26,6 +28,7 @@ import {
   PostgresWorkflowsRepository,
   createPostgresPool,
   mapAgentRowToDomain,
+  mapLoopDefinitionRowToDomain,
   mapRunRowToDomain,
   mapScheduleRowToDomain,
   mapTaskRowToDomain,
@@ -36,6 +39,7 @@ import {
 } from "./index.js";
 import type {
   AgentRow,
+  LoopDefinitionRow,
   RunRow,
   ScheduleRow,
   TaskRow,
@@ -81,6 +85,24 @@ function createWorkflowDefinition(
     workflowDefinitionId,
     name: workflowDefinitionId,
     enabled: true,
+    createdAt: "2026-03-15T00:00:00.000Z",
+    updatedAt: "2026-03-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createLoopDefinition(
+  workflowDefinitionId: string,
+  overrides: Partial<LoopDefinition> = {},
+): LoopDefinition {
+  return {
+    loopDefinitionId: `loop-${workflowDefinitionId}`,
+    workflowDefinitionId,
+    name: `Loop for ${workflowDefinitionId}`,
+    controllerTaskTemplateId: "task-template-review",
+    entryTaskTemplateIds: ["task-template-dev"],
+    bodyTaskTemplateIds: ["task-template-dev", "task-template-review"],
+    maxIterations: 3,
     createdAt: "2026-03-15T00:00:00.000Z",
     updatedAt: "2026-03-15T00:00:00.000Z",
     ...overrides,
@@ -188,6 +210,7 @@ describe.sequential("store-postgres integration", () => {
   let agentsRepository: PostgresAgentsRepository;
   let workflowsRepository: PostgresWorkflowsRepository;
   let workflowDefinitionsRepository: PostgresWorkflowDefinitionsRepository;
+  let loopDefinitionsRepository: PostgresLoopDefinitionsRepository;
   let tasksRepository: PostgresTasksRepository;
   let taskEdgesRepository: PostgresTaskEdgesRepository;
   let taskTemplatesRepository: PostgresTaskTemplatesRepository;
@@ -203,6 +226,7 @@ describe.sequential("store-postgres integration", () => {
           task_template_edges,
           task_edges,
           schedules,
+          loop_definitions,
           task_templates,
           tasks,
           workflow_definitions,
@@ -243,6 +267,7 @@ describe.sequential("store-postgres integration", () => {
     workflowDefinitionsRepository = new PostgresWorkflowDefinitionsRepository(
       pool,
     );
+    loopDefinitionsRepository = new PostgresLoopDefinitionsRepository(pool);
     tasksRepository = new PostgresTasksRepository(pool);
     taskEdgesRepository = new PostgresTaskEdgesRepository(pool);
     taskTemplatesRepository = new PostgresTaskTemplatesRepository(pool);
@@ -284,6 +309,7 @@ describe.sequential("store-postgres integration", () => {
         [
           [
             "agents",
+            "loop_definitions",
             "workflow_definitions",
             "workflows",
             "task_templates",
@@ -298,6 +324,7 @@ describe.sequential("store-postgres integration", () => {
 
       expect(result.rows.map((row) => row.table_name)).toEqual([
         "agents",
+        "loop_definitions",
         "runs",
         "schedules",
         "task_edges",
@@ -324,9 +351,14 @@ describe.sequential("store-postgres integration", () => {
             "idx_tasks_status",
             "idx_tasks_assignee_agent_id",
             "idx_tasks_task_template_id",
+            "idx_tasks_loop_definition_id",
+            "idx_tasks_iteration",
+            "idx_tasks_spawned_from_task_id",
             "idx_task_edges_to_task_id",
             "idx_task_edges_from_task_id",
             "idx_workflow_definitions_enabled",
+            "idx_loop_definitions_workflow_definition_id",
+            "idx_loop_definitions_controller_task_template_id",
             "idx_workflows_workflow_definition_id",
             "idx_task_templates_workflow_definition_id",
             "idx_task_templates_default_assignee_agent_id",
@@ -347,6 +379,8 @@ describe.sequential("store-postgres integration", () => {
       );
 
       expect(indexes.rows.map((row) => row.indexname)).toEqual([
+        "idx_loop_definitions_controller_task_template_id",
+        "idx_loop_definitions_workflow_definition_id",
         "idx_runs_agent_id",
         "idx_runs_status",
         "idx_runs_task_id",
@@ -357,6 +391,9 @@ describe.sequential("store-postgres integration", () => {
         "idx_task_templates_default_assignee_agent_id",
         "idx_task_templates_workflow_definition_id",
         "idx_tasks_assignee_agent_id",
+        "idx_tasks_iteration",
+        "idx_tasks_loop_definition_id",
+        "idx_tasks_spawned_from_task_id",
         "idx_tasks_status",
         "idx_tasks_task_template_id",
         "idx_tasks_workflow_id",
@@ -616,6 +653,57 @@ describe.sequential("store-postgres integration", () => {
     });
   });
 
+  describe("LoopDefinitionsRepository", () => {
+    it("round-trips inserted loop definitions", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-dev", "workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-review", "workflow-definition-1"),
+      );
+
+      const loopDefinition = createLoopDefinition("workflow-definition-1");
+
+      await loopDefinitionsRepository.upsert(loopDefinition);
+
+      expect(
+        await loopDefinitionsRepository.findById(
+          loopDefinition.loopDefinitionId,
+        ),
+      ).toEqual(loopDefinition);
+      expect(
+        await loopDefinitionsRepository.findByWorkflowDefinitionId(
+          "workflow-definition-1",
+        ),
+      ).toEqual(loopDefinition);
+    });
+
+    it("deletes loop definitions by id", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-dev", "workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-review", "workflow-definition-1"),
+      );
+      await loopDefinitionsRepository.upsert(
+        createLoopDefinition("workflow-definition-1"),
+      );
+
+      await loopDefinitionsRepository.deleteById("loop-workflow-definition-1");
+      await loopDefinitionsRepository.deleteById("missing-loop");
+
+      expect(
+        await loopDefinitionsRepository.findById("loop-workflow-definition-1"),
+      ).toBeNull();
+    });
+  });
+
   describe("TasksRepository", () => {
     it("round-trips inserted tasks", async () => {
       await workflowsRepository.insert(createWorkflow("workflow-1"));
@@ -670,6 +758,43 @@ describe.sequential("store-postgres integration", () => {
 
       const task = createTask("task-1", "workflow-1", {
         taskTemplateId: "task-template-1",
+      });
+
+      await tasksRepository.insert(task);
+
+      expect(await tasksRepository.findById("task-1")).toEqual(task);
+    });
+
+    it("round-trips loop provenance fields", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-dev", "workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-review", "workflow-definition-1"),
+      );
+      await loopDefinitionsRepository.upsert(
+        createLoopDefinition("workflow-definition-1"),
+      );
+      await workflowsRepository.insert(
+        createWorkflow("workflow-1", {
+          workflowDefinitionId: "workflow-definition-1",
+          triggerSource: "manual",
+        }),
+      );
+      await tasksRepository.insert(
+        createTask("task-source", "workflow-1", {
+          taskTemplateId: "task-template-review",
+        }),
+      );
+
+      const task = createTask("task-1", "workflow-1", {
+        taskTemplateId: "task-template-dev",
+        loopDefinitionId: "loop-workflow-definition-1",
+        iteration: 2,
+        spawnedFromTaskId: "task-source",
       });
 
       await tasksRepository.insert(task);
@@ -1325,6 +1450,9 @@ describe.sequential("store-postgres integration", () => {
         assignee_agent_id: null,
         retry_count: 0,
         task_template_id: "task-template-1",
+        loop_definition_id: "loop-1",
+        iteration: 2,
+        spawned_from_task_id: "task-parent-1",
         concurrency_key: null,
         metadata: { priority: "high" },
         created_at: "2026-03-15T00:00:00.000Z",
@@ -1347,6 +1475,9 @@ describe.sequential("store-postgres integration", () => {
       expect(agent.config).toEqual({ endpoint: "http://localhost" });
       expect(task.payload).toEqual({ input: "value" });
       expect(task.taskTemplateId).toBe("task-template-1");
+      expect(task.loopDefinitionId).toBe("loop-1");
+      expect(task.iteration).toBe(2);
+      expect(task.spawnedFromTaskId).toBe("task-parent-1");
       expect(task.metadata).toEqual({ priority: "high" });
       expect(run.output).toEqual({ value: "ok" });
     });
@@ -1373,10 +1504,29 @@ describe.sequential("store-postgres integration", () => {
         created_at: "2026-03-15T00:00:00.000Z",
         updated_at: "2026-03-15T00:00:00.000Z",
       } satisfies TaskTemplateRow);
+      const loopDefinition = mapLoopDefinitionRowToDomain({
+        loop_definition_id: "loop-1",
+        workflow_definition_id: "workflow-definition-1",
+        name: "Review loop",
+        controller_task_template_id: "task-template-review",
+        entry_task_template_ids: ["task-template-dev"],
+        body_task_template_ids: ["task-template-dev", "task-template-review"],
+        max_iterations: 4,
+        created_at: "2026-03-15T00:00:00.000Z",
+        updated_at: "2026-03-15T00:00:00.000Z",
+      } satisfies LoopDefinitionRow);
 
       expect(workflowDefinition.metadata).toEqual({ team: "platform" });
       expect(taskTemplate.payload).toEqual({ input: "value" });
       expect(taskTemplate.metadata).toEqual({ priority: "high" });
+      expect(loopDefinition.entryTaskTemplateIds).toEqual([
+        "task-template-dev",
+      ]);
+      expect(loopDefinition.bodyTaskTemplateIds).toEqual([
+        "task-template-dev",
+        "task-template-review",
+      ]);
+      expect(loopDefinition.maxIterations).toBe(4);
     });
 
     it("restores timestamps as ISO strings", () => {
@@ -1438,6 +1588,9 @@ describe.sequential("store-postgres integration", () => {
         assignee_agent_id: null,
         retry_count: 0,
         task_template_id: null,
+        loop_definition_id: null,
+        iteration: null,
+        spawned_from_task_id: null,
         concurrency_key: null,
         metadata: null,
         created_at: "2026-03-15T00:00:00.000Z",
@@ -1515,6 +1668,36 @@ describe.sequential("store-postgres integration", () => {
       ).rejects.toThrow();
     });
 
+    it("fails to delete a loop definition while tasks still reference it", async () => {
+      await workflowDefinitionsRepository.upsert(
+        createWorkflowDefinition("workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-dev", "workflow-definition-1"),
+      );
+      await taskTemplatesRepository.upsert(
+        createTaskTemplate("task-template-review", "workflow-definition-1"),
+      );
+      await loopDefinitionsRepository.upsert(
+        createLoopDefinition("workflow-definition-1"),
+      );
+      await workflowsRepository.insert(
+        createWorkflow("workflow-1", {
+          workflowDefinitionId: "workflow-definition-1",
+        }),
+      );
+      await tasksRepository.insert(
+        createTask("task-1", "workflow-1", {
+          taskTemplateId: "task-template-dev",
+          loopDefinitionId: "loop-workflow-definition-1",
+        }),
+      );
+
+      await expect(
+        loopDefinitionsRepository.deleteById("loop-workflow-definition-1"),
+      ).rejects.toThrow();
+    });
+
     it("fails to delete a task template while template edges still reference it", async () => {
       await workflowDefinitionsRepository.upsert(
         createWorkflowDefinition("workflow-definition-1"),
@@ -1549,6 +1732,9 @@ describe.sequential("store-postgres integration", () => {
       ).resolves.toBeUndefined();
       await expect(
         workflowDefinitionsRepository.deleteById("missing"),
+      ).resolves.toBeUndefined();
+      await expect(
+        loopDefinitionsRepository.deleteById("missing"),
       ).resolves.toBeUndefined();
       await expect(
         taskTemplatesRepository.deleteById("missing"),

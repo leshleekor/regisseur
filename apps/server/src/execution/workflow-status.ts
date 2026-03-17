@@ -40,12 +40,14 @@ export async function updateWorkflowStatus(
   }
 
   const status = deriveWorkflowStatus(tasks);
+  const terminalStatus =
+    workflow.status === "failed" && status !== "failed" ? "failed" : status;
   const updatedWorkflow =
-    workflow.status === status
+    workflow.status === terminalStatus
       ? workflow
       : {
           ...workflow,
-          status,
+          status: terminalStatus,
           updatedAt: now,
         };
 

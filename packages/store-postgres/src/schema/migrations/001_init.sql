@@ -49,6 +49,24 @@ CREATE TABLE IF NOT EXISTS task_templates (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS loop_definitions (
+  loop_definition_id TEXT PRIMARY KEY,
+  workflow_definition_id TEXT NOT NULL
+    REFERENCES workflow_definitions(workflow_definition_id),
+  name TEXT NOT NULL,
+  controller_task_template_id TEXT NOT NULL
+    REFERENCES task_templates(task_template_id),
+  entry_task_template_ids JSONB NOT NULL,
+  body_task_template_ids JSONB NOT NULL,
+  max_iterations INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT loop_definitions_entry_task_template_ids_is_array
+    CHECK (jsonb_typeof(entry_task_template_ids) = 'array'),
+  CONSTRAINT loop_definitions_body_task_template_ids_is_array
+    CHECK (jsonb_typeof(body_task_template_ids) = 'array')
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,
   workflow_id TEXT NOT NULL REFERENCES workflows(workflow_id),
@@ -58,6 +76,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   assignee_agent_id TEXT NULL REFERENCES agents(agent_id),
   retry_count INTEGER NOT NULL,
   task_template_id TEXT NULL REFERENCES task_templates(task_template_id),
+  loop_definition_id TEXT NULL REFERENCES loop_definitions(loop_definition_id),
+  iteration INTEGER NULL,
+  spawned_from_task_id TEXT NULL REFERENCES tasks(task_id),
   concurrency_key TEXT NULL,
   metadata JSONB NULL,
   created_at TIMESTAMPTZ NOT NULL,
@@ -120,6 +141,15 @@ CREATE INDEX IF NOT EXISTS idx_tasks_assignee_agent_id
 CREATE INDEX IF NOT EXISTS idx_tasks_task_template_id
   ON tasks (task_template_id);
 
+CREATE INDEX IF NOT EXISTS idx_tasks_loop_definition_id
+  ON tasks (loop_definition_id);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_iteration
+  ON tasks (iteration);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_spawned_from_task_id
+  ON tasks (spawned_from_task_id);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_key
   ON tasks (concurrency_key);
 
@@ -140,6 +170,12 @@ CREATE INDEX IF NOT EXISTS idx_task_templates_workflow_definition_id
 
 CREATE INDEX IF NOT EXISTS idx_task_templates_default_assignee_agent_id
   ON task_templates (default_assignee_agent_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_definitions_workflow_definition_id
+  ON loop_definitions (workflow_definition_id);
+
+CREATE INDEX IF NOT EXISTS idx_loop_definitions_controller_task_template_id
+  ON loop_definitions (controller_task_template_id);
 
 CREATE INDEX IF NOT EXISTS idx_task_template_edges_from_task_template_id
   ON task_template_edges (from_task_template_id);

@@ -1,5 +1,6 @@
 import {
   PostgresAgentsRepository,
+  PostgresLoopDefinitionsRepository,
   PostgresRunsRepository,
   PostgresSchedulesRepository,
   PostgresTaskEdgesRepository,
@@ -24,6 +25,7 @@ export function createRepositories(db: Queryable): ServerRepositories {
     ),
     taskTemplatesRepository: new PostgresTaskTemplatesRepository(db),
     taskTemplateEdgesRepository: new PostgresTaskTemplateEdgesRepository(db),
+    loopDefinitionsRepository: new PostgresLoopDefinitionsRepository(db),
     schedulesRepository: new PostgresSchedulesRepository(db),
     runsRepository: new PostgresRunsRepository(db),
   };

@@ -1,4 +1,5 @@
 export * from "./domain/agent.js";
+export * from "./domain/loop-definition.js";
 export * from "./domain/run.js";
 export * from "./domain/schedule.js";
 export * from "./domain/shared.js";

@@ -43,6 +43,18 @@ export interface WorkflowDefinitionRow extends QueryResultRow {
   updated_at: TimestampValue;
 }
 
+export interface LoopDefinitionRow extends QueryResultRow {
+  loop_definition_id: string;
+  workflow_definition_id: string;
+  name: string;
+  controller_task_template_id: string;
+  entry_task_template_ids: unknown;
+  body_task_template_ids: unknown;
+  max_iterations: number;
+  created_at: TimestampValue;
+  updated_at: TimestampValue;
+}
+
 export interface TaskRow extends QueryResultRow {
   task_id: string;
   workflow_id: string;
@@ -52,6 +64,9 @@ export interface TaskRow extends QueryResultRow {
   assignee_agent_id: string | null;
   retry_count: number;
   task_template_id: string | null;
+  loop_definition_id: string | null;
+  iteration: number | null;
+  spawned_from_task_id: string | null;
   concurrency_key: string | null;
   metadata: unknown | null;
   created_at: TimestampValue;
@@ -141,6 +156,18 @@ export interface WorkflowDefinitionRowInput {
   updated_at: string;
 }
 
+export interface LoopDefinitionRowInput {
+  loop_definition_id: string;
+  workflow_definition_id: string;
+  name: string;
+  controller_task_template_id: string;
+  entry_task_template_ids: string;
+  body_task_template_ids: string;
+  max_iterations: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskRowInput {
   task_id: string;
   workflow_id: string;
@@ -150,6 +177,9 @@ export interface TaskRowInput {
   assignee_agent_id: string | null;
   retry_count: number;
   task_template_id: string | null;
+  loop_definition_id: string | null;
+  iteration: number | null;
+  spawned_from_task_id: string | null;
   concurrency_key: string | null;
   metadata: string | null;
   created_at: string;

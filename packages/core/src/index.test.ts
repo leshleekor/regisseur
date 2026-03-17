@@ -21,6 +21,7 @@ import {
 } from "./index.js";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   Schedule,
   Task,
@@ -70,6 +71,18 @@ describe("core domain exports", () => {
       },
     };
 
+    const loopDefinition: LoopDefinition = {
+      loopDefinitionId: "loop-1",
+      workflowDefinitionId: workflowDefinition.workflowDefinitionId,
+      name: "Review Loop",
+      controllerTaskTemplateId: "task-template-review",
+      entryTaskTemplateIds: ["task-template-1"],
+      bodyTaskTemplateIds: ["task-template-1", "task-template-review"],
+      maxIterations: 3,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      updatedAt: "2026-03-12T00:05:00.000Z",
+    };
+
     const task: Task = {
       taskId: "task-1",
       workflowId: workflow.workflowId,
@@ -81,6 +94,8 @@ describe("core domain exports", () => {
       assigneeAgentId: agent.agentId,
       retryCount: 0,
       taskTemplateId: "task-template-1",
+      loopDefinitionId: "loop-1",
+      iteration: 1,
       concurrencyKey: "repo:regisseur",
       createdAt: "2026-03-12T00:00:00.000Z",
       updatedAt: "2026-03-12T00:05:00.000Z",
@@ -140,6 +155,7 @@ describe("core domain exports", () => {
 
     expect(agent.runtimeType).toBe("cli");
     expect(workflowDefinition.enabled).toBe(true);
+    expect(loopDefinition.maxIterations).toBe(3);
     expect(task.status).toBe("ready");
     expect(edge.type).toBe("depends_on");
     expect(taskTemplate.retryCount).toBe(0);
@@ -148,6 +164,7 @@ describe("core domain exports", () => {
     expect(run.status).toBe("queued");
     expect(workflow.triggerSource).toBe("manual");
     expect(task.taskTemplateId).toBe(taskTemplate.taskTemplateId);
+    expect(task.loopDefinitionId).toBe(loopDefinition.loopDefinitionId);
   });
 });
 

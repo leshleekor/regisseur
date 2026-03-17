@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   Task,
   TaskEdge,
@@ -100,6 +101,7 @@ describe("dispatch cycle", () => {
     const workflows = new Map([[workflow.workflowId, workflow]]);
     const agents = new Map([[agent.agentId, agent]]);
     const workflowDefinitions = new Map<string, WorkflowDefinition>();
+    const loopDefinitions = new Map<string, LoopDefinition>();
     const taskTemplates = new Map<string, TaskTemplate>();
     const taskTemplateEdges: TaskTemplateEdge[] = [];
     const runs = new Map<string, Run>();
@@ -170,6 +172,23 @@ describe("dispatch cycle", () => {
       deleteById: vi.fn(async (workflowDefinitionId: string) => {
         workflowDefinitions.delete(workflowDefinitionId);
       }),
+    };
+    const loopDefinitionsRepository = {
+      upsert: vi.fn(async (loopDefinition: LoopDefinition) => {
+        loopDefinitions.set(loopDefinition.loopDefinitionId, loopDefinition);
+      }),
+      findByWorkflowDefinitionId: vi.fn(
+        async (workflowDefinitionId: string) =>
+          Array.from(loopDefinitions.values()).find(
+            (loopDefinition) =>
+              loopDefinition.workflowDefinitionId === workflowDefinitionId,
+          ) ?? null,
+      ),
+      findById: vi.fn(
+        async (loopDefinitionId: string) =>
+          loopDefinitions.get(loopDefinitionId) ?? null,
+      ),
+      deleteById: vi.fn(async () => undefined),
     };
     const taskTemplatesRepository = {
       upsert: vi.fn(async (taskTemplate: TaskTemplate) => {
@@ -266,6 +285,7 @@ describe("dispatch cycle", () => {
           tasksRepository,
           taskEdgesRepository,
           workflowDefinitionsRepository,
+          loopDefinitionsRepository,
           taskTemplatesRepository,
           taskTemplateEdgesRepository,
           schedulesRepository,
@@ -307,6 +327,7 @@ describe("dispatch cycle", () => {
         tasksRepository,
         taskEdgesRepository,
         workflowDefinitionsRepository,
+        loopDefinitionsRepository,
         taskTemplatesRepository,
         taskTemplateEdgesRepository,
         schedulesRepository,

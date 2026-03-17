@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   Schedule,
   Task,
@@ -18,6 +19,7 @@ import type {
   AgentsRepositoryLike,
   RunsRepositoryLike,
   SchedulesRepositoryLike,
+  LoopDefinitionsRepositoryLike,
   ServerDependencies,
   TaskEdgesRepositoryLike,
   TaskTemplateEdgesRepositoryLike,
@@ -133,6 +135,7 @@ interface TestContext {
     tasks: Map<string, Task>;
     taskEdges: TaskEdge[];
     workflowDefinitions: Map<string, WorkflowDefinition>;
+    loopDefinitions: Map<string, LoopDefinition>;
     taskTemplates: Map<string, TaskTemplate>;
     taskTemplateEdges: TaskTemplateEdge[];
     schedules: Map<string, Schedule>;
@@ -145,6 +148,7 @@ interface TestContext {
     tasks: Record<string, ReturnType<typeof vi.fn>>;
     taskEdges: Record<string, ReturnType<typeof vi.fn>>;
     workflowDefinitions: Record<string, ReturnType<typeof vi.fn>>;
+    loopDefinitions: Record<string, ReturnType<typeof vi.fn>>;
     taskTemplates: Record<string, ReturnType<typeof vi.fn>>;
     taskTemplateEdges: Record<string, ReturnType<typeof vi.fn>>;
     schedules: Record<string, ReturnType<typeof vi.fn>>;
@@ -164,6 +168,7 @@ function createTestContext(): TestContext {
     tasks: new Map<string, Task>(),
     taskEdges: [],
     workflowDefinitions: new Map<string, WorkflowDefinition>(),
+    loopDefinitions: new Map<string, LoopDefinition>(),
     taskTemplates: new Map<string, TaskTemplate>(),
     taskTemplateEdges: [],
     schedules: new Map<string, Schedule>(),
@@ -292,6 +297,35 @@ function createTestContext(): TestContext {
   const taskTemplatesDeleteById = vi.fn(async (taskTemplateId: string) => {
     callLog.push("taskTemplates.deleteById");
     state.taskTemplates.delete(taskTemplateId);
+  });
+
+  const loopDefinitionsUpsert = vi.fn(
+    async (loopDefinition: LoopDefinition) => {
+      callLog.push("loopDefinitions.upsert");
+      state.loopDefinitions.set(
+        loopDefinition.loopDefinitionId,
+        loopDefinition,
+      );
+    },
+  );
+  const loopDefinitionsFindByWorkflowDefinitionId = vi.fn(
+    async (workflowDefinitionId: string) => {
+      callLog.push("loopDefinitions.findByWorkflowDefinitionId");
+      return (
+        Array.from(state.loopDefinitions.values()).find(
+          (loopDefinition) =>
+            loopDefinition.workflowDefinitionId === workflowDefinitionId,
+        ) ?? null
+      );
+    },
+  );
+  const loopDefinitionsFindById = vi.fn(async (loopDefinitionId: string) => {
+    callLog.push("loopDefinitions.findById");
+    return state.loopDefinitions.get(loopDefinitionId) ?? null;
+  });
+  const loopDefinitionsDeleteById = vi.fn(async (loopDefinitionId: string) => {
+    callLog.push("loopDefinitions.deleteById");
+    state.loopDefinitions.delete(loopDefinitionId);
   });
 
   const taskTemplateEdgesInsert = vi.fn(async (edge: TaskTemplateEdge) => {
@@ -511,6 +545,12 @@ function createTestContext(): TestContext {
     deleteByTaskTemplateId: taskTemplateEdgesDeleteByTaskTemplateId,
     deleteEdge: taskTemplateEdgesDeleteEdge,
   };
+  const loopDefinitionsRepository: LoopDefinitionsRepositoryLike = {
+    upsert: loopDefinitionsUpsert,
+    findByWorkflowDefinitionId: loopDefinitionsFindByWorkflowDefinitionId,
+    findById: loopDefinitionsFindById,
+    deleteById: loopDefinitionsDeleteById,
+  };
   const schedulesRepository: SchedulesRepositoryLike = {
     upsert: schedulesUpsert,
     findAll: schedulesFindAll,
@@ -571,6 +611,7 @@ function createTestContext(): TestContext {
         tasksRepository,
         taskEdgesRepository,
         workflowDefinitionsRepository,
+        loopDefinitionsRepository,
         taskTemplatesRepository,
         taskTemplateEdgesRepository,
         schedulesRepository,
@@ -624,6 +665,12 @@ function createTestContext(): TestContext {
         findEnabled: workflowDefinitionsFindEnabled,
         findById: workflowDefinitionsFindById,
         deleteById: workflowDefinitionsDeleteById,
+      },
+      loopDefinitions: {
+        upsert: loopDefinitionsUpsert,
+        findByWorkflowDefinitionId: loopDefinitionsFindByWorkflowDefinitionId,
+        findById: loopDefinitionsFindById,
+        deleteById: loopDefinitionsDeleteById,
       },
       taskTemplates: {
         upsert: taskTemplatesUpsert,

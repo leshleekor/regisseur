@@ -1,5 +1,6 @@
 export * from "./connection.js";
 export * from "./mappers/agent-mapper.js";
+export * from "./mappers/loop-definition-mapper.js";
 export * from "./mappers/run-mapper.js";
 export * from "./mappers/schedule-mapper.js";
 export * from "./mappers/task-edge-mapper.js";
@@ -10,6 +11,7 @@ export * from "./mappers/workflow-mapper.js";
 export * from "./mappers/workflow-definition-mapper.js";
 export * from "./migrate.js";
 export * from "./repositories/agents-repository.js";
+export * from "./repositories/loop-definitions-repository.js";
 export * from "./repositories/runs-repository.js";
 export * from "./repositories/schedules-repository.js";
 export * from "./repositories/task-edges-repository.js";

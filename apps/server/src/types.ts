@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type {
   AgentDefinition,
+  LoopDefinition,
   Run,
   RunStatus,
   Schedule,
@@ -96,6 +97,15 @@ export interface TaskTemplateEdgesRepositoryLike {
   ): Promise<void>;
 }
 
+export interface LoopDefinitionsRepositoryLike {
+  upsert(loopDefinition: LoopDefinition): Promise<void>;
+  findByWorkflowDefinitionId(
+    workflowDefinitionId: string,
+  ): Promise<LoopDefinition | null>;
+  findById(loopDefinitionId: string): Promise<LoopDefinition | null>;
+  deleteById(loopDefinitionId: string): Promise<void>;
+}
+
 export interface SchedulesRepositoryLike {
   upsert(schedule: Schedule): Promise<void>;
   findAll(): Promise<Schedule[]>;
@@ -125,6 +135,7 @@ export interface ServerRepositories {
   workflowDefinitionsRepository: WorkflowDefinitionsRepositoryLike;
   taskTemplatesRepository: TaskTemplatesRepositoryLike;
   taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
+  loopDefinitionsRepository: LoopDefinitionsRepositoryLike;
   schedulesRepository: SchedulesRepositoryLike;
   runsRepository: RunsRepositoryLike;
 }

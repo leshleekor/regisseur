@@ -162,6 +162,9 @@ function createInMemoryPool() {
           assigneeAgentId,
           retryCount,
           taskTemplateId,
+          loopDefinitionId,
+          iteration,
+          spawnedFromTaskId,
           concurrencyKey,
           metadata,
           createdAt,
@@ -179,6 +182,11 @@ function createInMemoryPool() {
           retry_count: Number(retryCount),
           task_template_id:
             taskTemplateId === null ? null : String(taskTemplateId),
+          loop_definition_id:
+            loopDefinitionId === null ? null : String(loopDefinitionId),
+          iteration: iteration === null ? null : Number(iteration),
+          spawned_from_task_id:
+            spawnedFromTaskId === null ? null : String(spawnedFromTaskId),
           concurrency_key:
             concurrencyKey === null ? null : String(concurrencyKey),
           metadata: metadata === null ? null : JSON.parse(String(metadata)),
@@ -403,6 +411,9 @@ describe("standalone runtime composition", () => {
       assignee_agent_id: null,
       retry_count: 0,
       task_template_id: null,
+      loop_definition_id: null,
+      iteration: null,
+      spawned_from_task_id: null,
       concurrency_key: null,
       metadata: null,
       created_at: "2026-03-15T00:00:00.000Z",
