@@ -78,6 +78,8 @@ export interface TaskEdgeRow extends QueryResultRow {
   from_task_id: string;
   to_task_id: string;
   type: string;
+  inject_output: boolean;
+  output_merge_key: string | null;
 }
 
 export interface TaskTemplateRow extends QueryResultRow {
@@ -97,6 +99,8 @@ export interface TaskTemplateEdgeRow extends QueryResultRow {
   from_task_template_id: string;
   to_task_template_id: string;
   type: string;
+  inject_output: boolean;
+  output_merge_key: string | null;
 }
 
 export interface ScheduleRow extends QueryResultRow {
@@ -192,6 +196,8 @@ export interface TaskEdgeRowInput {
   from_task_id: string;
   to_task_id: string;
   type: string;
+  inject_output: boolean;
+  output_merge_key: string | null;
 }
 
 export interface TaskTemplateRowInput {
@@ -211,6 +217,8 @@ export interface TaskTemplateEdgeRowInput {
   from_task_template_id: string;
   to_task_template_id: string;
   type: string;
+  inject_output: boolean;
+  output_merge_key: string | null;
 }
 
 export interface ScheduleRowInput {

@@ -24,6 +24,6 @@
     "testcontainers": "^11.7.4"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs"
   }
 }

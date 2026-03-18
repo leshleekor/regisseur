@@ -75,22 +75,29 @@ function createTaskTemplate(
   };
 }
 
-function createTaskEdge(fromTaskId: string, toTaskId: string): TaskEdge {
+function createTaskEdge(
+  fromTaskId: string,
+  toTaskId: string,
+  overrides: Partial<TaskEdge> = {},
+): TaskEdge {
   return {
     fromTaskId,
     toTaskId,
     type: "depends_on",
+    ...overrides,
   };
 }
 
 function createTaskTemplateEdge(
   fromTaskTemplateId: string,
   toTaskTemplateId: string,
+  overrides: Partial<TaskTemplateEdge> = {},
 ): TaskTemplateEdge {
   return {
     fromTaskTemplateId,
     toTaskTemplateId,
     type: "depends_on",
+    ...overrides,
   };
 }
 
@@ -161,6 +168,18 @@ function createRepositories(options: {
           runs.set(run.runId, run);
         }),
         findByTaskId: vi.fn(async () => Array.from(runs.values())),
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            Array.from(runs.values())
+              .filter(
+                (run) => run.taskId === taskId && run.status === "succeeded",
+              )
+              .sort((left, right) =>
+                (right.finishedAt ?? right.createdAt).localeCompare(
+                  left.finishedAt ?? left.createdAt,
+                ),
+              )[0] ?? null,
+        ),
         findByAgentId: vi.fn(async () => Array.from(runs.values())),
         findByStatus: vi.fn(async () => [] as Run[]),
         findById: vi.fn(async (runId: string) => runs.get(runId) ?? null),
@@ -270,8 +289,16 @@ function createRepositories(options: {
             );
           },
         ),
-        findByFromTaskTemplateId: vi.fn(async () => [] as TaskTemplateEdge[]),
-        findByToTaskTemplateId: vi.fn(async () => [] as TaskTemplateEdge[]),
+        findByFromTaskTemplateId: vi.fn(async (taskTemplateId: string) =>
+          taskTemplateEdges.filter(
+            (edge) => edge.fromTaskTemplateId === taskTemplateId,
+          ),
+        ),
+        findByToTaskTemplateId: vi.fn(async (taskTemplateId: string) =>
+          taskTemplateEdges.filter(
+            (edge) => edge.toTaskTemplateId === taskTemplateId,
+          ),
+        ),
         deleteByTaskTemplateId: vi.fn(async () => undefined),
         deleteEdge: vi.fn(async () => undefined),
       },
@@ -338,13 +365,28 @@ describe("loop expansion", () => {
       tasks: [dev1, review1, deploy],
       taskEdges: [
         createTaskEdge(dev1.taskId, review1.taskId),
-        createTaskEdge(review1.taskId, deploy.taskId),
+        createTaskEdge(review1.taskId, deploy.taskId, {
+          injectOutput: true,
+          outputMergeKey: "reviewResult",
+        }),
       ],
       taskTemplates: [devTemplate, reviewTemplate, deployTemplate],
       taskTemplateEdges: [
         createTaskTemplateEdge(
           devTemplate.taskTemplateId,
           reviewTemplate.taskTemplateId,
+          {
+            injectOutput: true,
+            outputMergeKey: "devResult",
+          },
+        ),
+        createTaskTemplateEdge(
+          reviewTemplate.taskTemplateId,
+          deployTemplate.taskTemplateId,
+          {
+            injectOutput: true,
+            outputMergeKey: "reviewResult",
+          },
         ),
       ],
       loopDefinition,
@@ -395,9 +437,15 @@ describe("loop expansion", () => {
     ).toEqual(["blocked", "blocked"]);
     expect(state.taskEdges).toEqual(
       expect.arrayContaining([
-        createTaskEdge("dev-2", "review-2"),
+        createTaskEdge("dev-2", "review-2", {
+          injectOutput: true,
+          outputMergeKey: "devResult",
+        }),
         createTaskEdge("review-1", "dev-2"),
-        createTaskEdge("review-2", "deploy-1"),
+        createTaskEdge("review-2", "deploy-1", {
+          injectOutput: true,
+          outputMergeKey: "reviewResult",
+        }),
       ]),
     );
     expect(requests).toEqual([
@@ -406,6 +454,124 @@ describe("loop expansion", () => {
         triggerSource: "internal",
       }),
     ]);
+  });
+
+  it("injects upstream output into a later iteration body task before dispatch", async () => {
+    const workflow = createWorkflow("workflow-1");
+    const loopDefinition = createLoopDefinition("workflow-definition-1");
+    const devTemplate = createTaskTemplate(
+      "dev-template",
+      workflow.workflowDefinitionId!,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const reviewTemplate = createTaskTemplate(
+      "review-template",
+      workflow.workflowDefinitionId!,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const dev1 = createTask("dev-1", workflow.workflowId, {
+      status: "succeeded",
+      taskTemplateId: devTemplate.taskTemplateId,
+      loopDefinitionId: loopDefinition.loopDefinitionId,
+      iteration: 1,
+    });
+    const review1 = createTask("review-1", workflow.workflowId, {
+      status: "succeeded",
+      assigneeAgentId: "agent-1",
+      taskTemplateId: reviewTemplate.taskTemplateId,
+      loopDefinitionId: loopDefinition.loopDefinitionId,
+      iteration: 1,
+    });
+    const { repositories, state } = createRepositories({
+      workflow,
+      tasks: [dev1, review1],
+      taskEdges: [createTaskEdge(dev1.taskId, review1.taskId)],
+      taskTemplates: [devTemplate, reviewTemplate],
+      taskTemplateEdges: [
+        createTaskTemplateEdge(
+          devTemplate.taskTemplateId,
+          reviewTemplate.taskTemplateId,
+          {
+            injectOutput: true,
+            outputMergeKey: "devResult",
+          },
+        ),
+      ],
+      loopDefinition,
+      agent: createAgent("agent-1"),
+    });
+    const { port, requests } = createEnqueuePort();
+    const randomUUIDImpl = vi
+      .fn()
+      .mockReturnValueOnce("dev-2")
+      .mockReturnValueOnce("review-2");
+
+    await expandLoopIteration(
+      review1,
+      loopDefinition,
+      workflow,
+      repositories,
+      port,
+      {
+        now: () => "2026-03-17T00:05:00.000Z",
+        randomUUIDImpl,
+      },
+    );
+
+    state.tasks.set(
+      "dev-2",
+      createTask("dev-2", workflow.workflowId, {
+        status: "succeeded",
+        assigneeAgentId: "agent-1",
+        taskTemplateId: devTemplate.taskTemplateId,
+        loopDefinitionId: loopDefinition.loopDefinitionId,
+        iteration: 2,
+      }),
+    );
+    state.runs.set("run-dev-2", {
+      runId: "run-dev-2",
+      taskId: "dev-2",
+      agentId: "agent-1",
+      status: "succeeded",
+      output: { patch: "iteration-2" },
+      createdAt: "2026-03-17T00:06:00.000Z",
+      updatedAt: "2026-03-17T00:06:00.000Z",
+      finishedAt: "2026-03-17T00:06:00.000Z",
+    });
+
+    const progressionResult = await progressDownstreamTasks(
+      state.tasks.get("dev-2")!,
+      repositories,
+      port,
+      {
+        now: () => "2026-03-17T00:06:30.000Z",
+      },
+    );
+
+    expect(progressionResult).toEqual({
+      enqueuedTaskIds: ["review-2"],
+      skippedTaskIds: [],
+      failures: [],
+      skippedBecauseWorkflowFailed: false,
+    });
+    expect(state.tasks.get("review-2")).toMatchObject({
+      status: "queued",
+      payload: {
+        devResult: { patch: "iteration-2" },
+      },
+    });
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: "review-2",
+          triggerSource: "internal",
+        }),
+      ]),
+    );
   });
 
   it("lets a later controller exit unlock external downstream work", async () => {

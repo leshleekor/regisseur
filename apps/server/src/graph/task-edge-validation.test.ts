@@ -21,11 +21,16 @@ function createTask(
   };
 }
 
-function createEdge(fromTaskId: string, toTaskId: string): TaskEdge {
+function createEdge(
+  fromTaskId: string,
+  toTaskId: string,
+  overrides: Partial<TaskEdge> = {},
+): TaskEdge {
   return {
     fromTaskId,
     toTaskId,
     type: "depends_on",
+    ...overrides,
   };
 }
 
@@ -189,6 +194,112 @@ describe("validateTaskEdgesForInsert", () => {
     ).rejects.toMatchObject({
       statusCode: 409,
       code: "TASK_EDGE_CYCLE",
+    });
+  });
+
+  it("rejects injectOutput=true without outputMergeKey", async () => {
+    const repositories = createRepositories({
+      tasks: [
+        createTask("task-a", "workflow-1"),
+        createTask("task-b", "workflow-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskEdgesForInsert(
+        [
+          createEdge("task-a", "task-b", {
+            injectOutput: true,
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects outputMergeKey when injectOutput is disabled", async () => {
+    const repositories = createRepositories({
+      tasks: [
+        createTask("task-a", "workflow-1"),
+        createTask("task-b", "workflow-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskEdgesForInsert(
+        [
+          createEdge("task-a", "task-b", {
+            outputMergeKey: "result",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects duplicate outputMergeKey for the same downstream task in the request", async () => {
+    const repositories = createRepositories({
+      tasks: [
+        createTask("task-a", "workflow-1"),
+        createTask("task-b", "workflow-1"),
+        createTask("task-c", "workflow-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskEdgesForInsert(
+        [
+          createEdge("task-a", "task-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+          createEdge("task-b", "task-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects duplicate outputMergeKey that collides with an existing injected edge", async () => {
+    const repositories = createRepositories({
+      tasks: [
+        createTask("task-a", "workflow-1"),
+        createTask("task-b", "workflow-1"),
+        createTask("task-c", "workflow-1"),
+      ],
+      existingEdges: [
+        createEdge("task-a", "task-c", {
+          injectOutput: true,
+          outputMergeKey: "shared",
+        }),
+      ],
+    });
+
+    await expect(
+      validateTaskEdgesForInsert(
+        [
+          createEdge("task-b", "task-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
     });
   });
 });

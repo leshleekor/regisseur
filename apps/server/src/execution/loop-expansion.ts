@@ -13,12 +13,14 @@ import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 
 import type {
   AgentsRepositoryLike,
+  RunsRepositoryLike,
   TaskEdgesRepositoryLike,
   TaskTemplateEdgesRepositoryLike,
   TaskTemplatesRepositoryLike,
   TasksRepositoryLike,
   WorkflowsRepositoryLike,
 } from "../types.js";
+import { injectUpstreamOutputs } from "./inject-upstream-outputs.js";
 import {
   selectPersistAndEnqueue,
   type SelectPersistAndEnqueueResult,
@@ -26,6 +28,7 @@ import {
 
 export interface LoopExpansionRepositories {
   agentsRepository: AgentsRepositoryLike;
+  runsRepository: RunsRepositoryLike;
   tasksRepository: TasksRepositoryLike;
   taskEdgesRepository: TaskEdgesRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
@@ -97,11 +100,13 @@ function createTaskEdge(
   fromTaskId: string,
   toTaskId: string,
   type: TaskEdge["type"] = "depends_on",
+  overrides: Partial<Pick<TaskEdge, "injectOutput" | "outputMergeKey">> = {},
 ): TaskEdge {
   return {
     fromTaskId,
     toTaskId,
     type,
+    ...overrides,
   };
 }
 
@@ -133,6 +138,12 @@ function createBodyTaskEdgeCopies(
       taskIdByTemplateId.get(bodyEdge.fromTaskTemplateId)!,
       taskIdByTemplateId.get(bodyEdge.toTaskTemplateId)!,
       bodyEdge.type,
+      {
+        ...(bodyEdge.injectOutput === true ? { injectOutput: true } : {}),
+        ...(bodyEdge.outputMergeKey !== undefined
+          ? { outputMergeKey: bodyEdge.outputMergeKey }
+          : {}),
+      },
     ),
   );
 }
@@ -230,8 +241,32 @@ export async function expandLoopIteration(
     existingRuntimeEdges,
     loopDefinition.loopDefinitionId,
   );
-  const externalDownstreamEdges = externalDownstreamTasks.map((externalTask) =>
-    createTaskEdge(nextControllerTaskId, externalTask.taskId),
+  const controllerTemplateEdges =
+    await repositories.taskTemplateEdgesRepository.findByFromTaskTemplateId(
+      loopDefinition.controllerTaskTemplateId,
+    );
+  const externalDownstreamEdges = externalDownstreamTasks.map(
+    (externalTask) => {
+      const templateEdge = controllerTemplateEdges.find(
+        (edge) =>
+          edge.toTaskTemplateId === externalTask.taskTemplateId &&
+          edge.type === "depends_on",
+      );
+
+      return createTaskEdge(
+        nextControllerTaskId,
+        externalTask.taskId,
+        "depends_on",
+        {
+          ...(templateEdge?.injectOutput === true
+            ? { injectOutput: true }
+            : {}),
+          ...(templateEdge?.outputMergeKey !== undefined
+            ? { outputMergeKey: templateEdge.outputMergeKey }
+            : {}),
+        },
+      );
+    },
   );
   const existingEdgeKeys = new Set(existingRuntimeEdges.map(edgeKey));
   const newEdges = [
@@ -276,9 +311,14 @@ export async function expandLoopIteration(
       continue;
     }
 
+    const injectedEntryTask = await injectUpstreamOutputs(
+      entryTask,
+      combinedEdges,
+      repositories.runsRepository,
+    );
     const result: SelectPersistAndEnqueueResult =
       await selectPersistAndEnqueueImpl(
-        entryTask,
+        injectedEntryTask,
         allAgents,
         {
           tasksRepository: repositories.tasksRepository,

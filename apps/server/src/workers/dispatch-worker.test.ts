@@ -111,6 +111,12 @@ function createRepositories(
       runsRepository: {
         findById: vi.fn(async (runId: string) => runs.get(runId) ?? null),
         findByTaskId: vi.fn(async () => Array.from(runs.values())),
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            Array.from(runs.values()).find(
+              (run) => run.taskId === taskId && run.status === "succeeded",
+            ) ?? null,
+        ),
         findByAgentId: vi.fn(async () => Array.from(runs.values())),
         findByStatus: vi.fn(async () => []),
         upsert: vi.fn(async (run: Run) => {

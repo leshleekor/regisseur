@@ -16,6 +16,26 @@ interface ValidatedTaskTemplateEdge {
   workflowDefinitionId: string;
 }
 
+function outputMergeKeyKey(edge: TaskTemplateEdge): string | null {
+  if (!edge.injectOutput || edge.outputMergeKey === undefined) {
+    return null;
+  }
+
+  return `${edge.toTaskTemplateId}:${edge.outputMergeKey}`;
+}
+
+function assertValidInjectionConfig(edge: TaskTemplateEdge): void {
+  if (edge.injectOutput === true && edge.outputMergeKey === undefined) {
+    throw badRequest("injectOutput=true requires outputMergeKey");
+  }
+
+  if (edge.outputMergeKey !== undefined && edge.injectOutput !== true) {
+    throw badRequest(
+      "outputMergeKey requires injectOutput=true on task template edges",
+    );
+  }
+}
+
 function edgeKey(edge: TaskTemplateEdge): string {
   return `${edge.fromTaskTemplateId}:${edge.toTaskTemplateId}:${edge.type}`;
 }
@@ -94,6 +114,8 @@ async function validateOneTaskTemplateEdge(
   edge: TaskTemplateEdge,
   repositories: TaskTemplateEdgeValidationRepositories,
 ): Promise<ValidatedTaskTemplateEdge> {
+  assertValidInjectionConfig(edge);
+
   if (edge.fromTaskTemplateId === edge.toTaskTemplateId) {
     throw badRequest("Task template edges cannot create self-dependencies");
   }
@@ -138,6 +160,12 @@ async function validateWorkflowDefinitionEdgeBatch(
           taskTemplateIds,
         );
   const existingEdgeKeys = new Set(existingEdges.map(edgeKey));
+  const existingInjectKeys = new Set(
+    existingEdges
+      .map(outputMergeKeyKey)
+      .filter((key): key is string => key !== null),
+  );
+  const requestInjectKeys = new Set<string>();
 
   for (const edge of edges) {
     if (existingEdgeKeys.has(edgeKey(edge))) {
@@ -146,6 +174,26 @@ async function validateWorkflowDefinitionEdgeBatch(
         `Task template edge ${edge.fromTaskTemplateId} -> ${edge.toTaskTemplateId} already exists`,
       );
     }
+
+    const injectKey = outputMergeKeyKey(edge);
+
+    if (injectKey === null) {
+      continue;
+    }
+
+    if (requestInjectKeys.has(injectKey)) {
+      throw badRequest(
+        `Task template edge inject output key ${edge.outputMergeKey} is duplicated for downstream template ${edge.toTaskTemplateId}`,
+      );
+    }
+
+    if (existingInjectKeys.has(injectKey)) {
+      throw badRequest(
+        `Task template edge inject output key ${edge.outputMergeKey} already exists for downstream template ${edge.toTaskTemplateId}`,
+      );
+    }
+
+    requestInjectKeys.add(injectKey);
   }
 
   if (detectCycle([...existingEdges, ...edges])) {
@@ -162,6 +210,7 @@ export async function validateTaskTemplateEdgesForInsert(
 ): Promise<readonly TaskTemplateEdge[]> {
   const validatedEdges: ValidatedTaskTemplateEdge[] = [];
   const requestEdgeKeys = new Set<string>();
+  const requestInjectKeys = new Set<string>();
 
   for (const edge of edges) {
     const key = edgeKey(edge);
@@ -174,6 +223,18 @@ export async function validateTaskTemplateEdgesForInsert(
     }
 
     requestEdgeKeys.add(key);
+    const injectKey = outputMergeKeyKey(edge);
+
+    if (injectKey !== null) {
+      if (requestInjectKeys.has(injectKey)) {
+        throw badRequest(
+          `Task template edge inject output key ${edge.outputMergeKey} is duplicated for downstream template ${edge.toTaskTemplateId}`,
+        );
+      }
+
+      requestInjectKeys.add(injectKey);
+    }
+
     validatedEdges.push(await validateOneTaskTemplateEdge(edge, repositories));
   }
 

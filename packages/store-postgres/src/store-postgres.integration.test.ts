@@ -922,7 +922,10 @@ describe.sequential("store-postgres integration", () => {
     it("inserts and finds edges by from_task_id and to_task_id", async () => {
       await seedTasks();
 
-      const edge = createTaskEdge("task-a", "task-b");
+      const edge = createTaskEdge("task-a", "task-b", {
+        injectOutput: true,
+        outputMergeKey: "result",
+      });
 
       await taskEdgesRepository.insert(edge);
 
@@ -938,12 +941,20 @@ describe.sequential("store-postgres integration", () => {
       await seedTasks();
 
       await taskEdgesRepository.insertMany([
-        createTaskEdge("task-a", "task-b"),
+        createTaskEdge("task-a", "task-b", {
+          injectOutput: true,
+          outputMergeKey: "result",
+        }),
         createTaskEdge("task-b", "task-c"),
       ]);
 
       await expect(
-        taskEdgesRepository.insert(createTaskEdge("task-a", "task-b")),
+        taskEdgesRepository.insert(
+          createTaskEdge("task-a", "task-b", {
+            injectOutput: true,
+            outputMergeKey: "result",
+          }),
+        ),
       ).rejects.toThrow();
       expect(await taskEdgesRepository.findByFromTaskId("task-b")).toEqual([
         createTaskEdge("task-b", "task-c"),
@@ -1154,7 +1165,14 @@ describe.sequential("store-postgres integration", () => {
     it("inserts and finds task template edges", async () => {
       await seedTaskTemplates();
 
-      const edge = createTaskTemplateEdge("task-template-a", "task-template-b");
+      const edge = createTaskTemplateEdge(
+        "task-template-a",
+        "task-template-b",
+        {
+          injectOutput: true,
+          outputMergeKey: "result",
+        },
+      );
 
       await taskTemplateEdgesRepository.insert(edge);
 
@@ -1174,13 +1192,19 @@ describe.sequential("store-postgres integration", () => {
       await seedTaskTemplates();
 
       await taskTemplateEdgesRepository.insertMany([
-        createTaskTemplateEdge("task-template-a", "task-template-b"),
+        createTaskTemplateEdge("task-template-a", "task-template-b", {
+          injectOutput: true,
+          outputMergeKey: "result",
+        }),
         createTaskTemplateEdge("task-template-b", "task-template-c"),
       ]);
 
       await expect(
         taskTemplateEdgesRepository.insert(
-          createTaskTemplateEdge("task-template-a", "task-template-b"),
+          createTaskTemplateEdge("task-template-a", "task-template-b", {
+            injectOutput: true,
+            outputMergeKey: "result",
+          }),
         ),
       ).rejects.toThrow();
     });
@@ -1437,6 +1461,42 @@ describe.sequential("store-postgres integration", () => {
       expect(
         (await runsRepository.findByStatus("queued")).map((run) => run.runId),
       ).toEqual(["run-2", "run-1"]);
+    });
+
+    it("finds the latest succeeded run by task id using finished_at ordering", async () => {
+      await seedRunDependencies();
+      await runsRepository.insert(
+        createRun("run-queued", "task-1", "agent-1", {
+          status: "queued",
+        }),
+      );
+      await runsRepository.insert(
+        createRun("run-success-1", "task-1", "agent-1", {
+          status: "succeeded",
+          output: { value: 1 },
+          finishedAt: "2026-03-15T00:06:00.000Z",
+          updatedAt: "2026-03-15T00:06:00.000Z",
+        }),
+      );
+      await runsRepository.insert(
+        createRun("run-success-2", "task-1", "agent-1", {
+          status: "succeeded",
+          output: { value: 2 },
+          finishedAt: "2026-03-15T00:07:00.000Z",
+          updatedAt: "2026-03-15T00:07:00.000Z",
+        }),
+      );
+
+      expect(
+        await runsRepository.findLatestSucceededByTaskId("task-1"),
+      ).toEqual(
+        createRun("run-success-2", "task-1", "agent-1", {
+          status: "succeeded",
+          output: { value: 2 },
+          finishedAt: "2026-03-15T00:07:00.000Z",
+          updatedAt: "2026-03-15T00:07:00.000Z",
+        }),
+      );
     });
 
     it("round-trips nullable output and error fields safely", async () => {

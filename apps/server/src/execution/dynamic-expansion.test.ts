@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  Run,
   Task,
   TaskEdge,
   Workflow,
@@ -103,6 +104,7 @@ function createRepositories(options: {
   workflow?: Workflow;
   agents?: readonly AgentDefinition[];
   edges?: readonly TaskEdge[];
+  runs?: readonly Run[];
 }) {
   const tasks = new Map(
     (options.tasks ?? []).map((task) => [task.taskId, task]),
@@ -114,6 +116,7 @@ function createRepositories(options: {
     ]),
   );
   const edges = [...(options.edges ?? [])];
+  const runs = [...(options.runs ?? [])];
   const workflow = options.workflow ?? createWorkflow("workflow-1");
 
   return {
@@ -121,6 +124,7 @@ function createRepositories(options: {
       tasks,
       agents,
       edges,
+      runs,
       workflow,
     },
     repositories: {
@@ -130,6 +134,20 @@ function createRepositories(options: {
         findById: vi.fn(async (agentId: string) => agents.get(agentId) ?? null),
         upsert: vi.fn(async () => undefined),
         deleteById: vi.fn(async () => undefined),
+      },
+      runsRepository: {
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            runs
+              .filter(
+                (run) => run.taskId === taskId && run.status === "succeeded",
+              )
+              .sort((left, right) =>
+                (right.finishedAt ?? right.createdAt).localeCompare(
+                  left.finishedAt ?? left.createdAt,
+                ),
+              )[0] ?? null,
+        ),
       },
       tasksRepository: {
         upsert: vi.fn(async (task: Task) => {
@@ -455,6 +473,47 @@ describe("applyDynamicExpansion", () => {
       },
     ]);
     expect(enqueuePort.enqueueTaskDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps spawned task payload unchanged because dynamic spawn edges do not inject output", async () => {
+    const currentTask = createTask("task-a", "workflow-1", {
+      status: "succeeded",
+    });
+    const { repositories, state } = createRepositories({
+      tasks: [currentTask],
+      workflow: createWorkflow("workflow-1", { status: "running" }),
+    });
+
+    const result = await applyDynamicExpansion(
+      currentTask,
+      state.workflow,
+      createDirective({
+        tasks: [
+          {
+            taskKey: "task-b",
+            title: "Task B",
+            payload: { seeded: true },
+            defaultAssigneeAgentId: "agent-1",
+            retryCount: 0,
+          },
+        ],
+        edges: [],
+      }),
+      repositories,
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-17T00:05:00.000Z",
+        randomUUIDImpl: vi.fn().mockReturnValueOnce("task-b-runtime"),
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      enqueuedTaskIds: ["task-b-runtime"],
+    });
+    expect(state.tasks.get("task-b-runtime")).toMatchObject({
+      payload: { seeded: true },
+    });
   });
 
   it("rejects dynamic expansion for terminal workflows", async () => {

@@ -13,6 +13,24 @@ interface ValidatedTaskEdge {
   workflowId: string;
 }
 
+function outputMergeKeyKey(edge: TaskEdge): string | null {
+  if (!edge.injectOutput || edge.outputMergeKey === undefined) {
+    return null;
+  }
+
+  return `${edge.toTaskId}:${edge.outputMergeKey}`;
+}
+
+function assertValidInjectionConfig(edge: TaskEdge): void {
+  if (edge.injectOutput === true && edge.outputMergeKey === undefined) {
+    throw badRequest("injectOutput=true requires outputMergeKey");
+  }
+
+  if (edge.outputMergeKey !== undefined && edge.injectOutput !== true) {
+    throw badRequest("outputMergeKey requires injectOutput=true on task edges");
+  }
+}
+
 function edgeKey(edge: TaskEdge): string {
   return `${edge.fromTaskId}:${edge.toTaskId}:${edge.type}`;
 }
@@ -88,6 +106,8 @@ async function validateOneTaskEdge(
   edge: TaskEdge,
   repositories: TaskEdgeValidationRepositories,
 ): Promise<ValidatedTaskEdge> {
+  assertValidInjectionConfig(edge);
+
   if (edge.fromTaskId === edge.toTaskId) {
     throw badRequest("Task edges cannot create self-dependencies");
   }
@@ -122,6 +142,12 @@ async function validateWorkflowEdgeBatch(
       ? []
       : await repositories.taskEdgesRepository.findAllByWorkflowTasks(taskIds);
   const existingEdgeKeys = new Set(existingEdges.map(edgeKey));
+  const existingInjectKeys = new Set(
+    existingEdges
+      .map(outputMergeKeyKey)
+      .filter((key): key is string => key !== null),
+  );
+  const requestInjectKeys = new Set<string>();
 
   for (const edge of edges) {
     if (existingEdgeKeys.has(edgeKey(edge))) {
@@ -130,6 +156,26 @@ async function validateWorkflowEdgeBatch(
         `Task edge ${edge.fromTaskId} -> ${edge.toTaskId} already exists`,
       );
     }
+
+    const injectKey = outputMergeKeyKey(edge);
+
+    if (injectKey === null) {
+      continue;
+    }
+
+    if (requestInjectKeys.has(injectKey)) {
+      throw badRequest(
+        `Task edge inject output key ${edge.outputMergeKey} is duplicated for downstream task ${edge.toTaskId}`,
+      );
+    }
+
+    if (existingInjectKeys.has(injectKey)) {
+      throw badRequest(
+        `Task edge inject output key ${edge.outputMergeKey} already exists for downstream task ${edge.toTaskId}`,
+      );
+    }
+
+    requestInjectKeys.add(injectKey);
   }
 
   if (detectCycle([...existingEdges, ...edges])) {
@@ -146,6 +192,7 @@ export async function validateTaskEdgesForInsert(
 ): Promise<readonly TaskEdge[]> {
   const validatedEdges: ValidatedTaskEdge[] = [];
   const requestEdgeKeys = new Set<string>();
+  const requestInjectKeys = new Set<string>();
 
   for (const edge of edges) {
     const key = edgeKey(edge);
@@ -158,6 +205,18 @@ export async function validateTaskEdgesForInsert(
     }
 
     requestEdgeKeys.add(key);
+    const injectKey = outputMergeKeyKey(edge);
+
+    if (injectKey !== null) {
+      if (requestInjectKeys.has(injectKey)) {
+        throw badRequest(
+          `Task edge inject output key ${edge.outputMergeKey} is duplicated for downstream task ${edge.toTaskId}`,
+        );
+      }
+
+      requestInjectKeys.add(injectKey);
+    }
+
     validatedEdges.push(await validateOneTaskEdge(edge, repositories));
   }
 

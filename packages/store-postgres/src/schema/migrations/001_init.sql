@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS task_edges (
   from_task_id TEXT NOT NULL REFERENCES tasks(task_id),
   to_task_id TEXT NOT NULL REFERENCES tasks(task_id),
   type TEXT NOT NULL,
+  inject_output BOOLEAN NOT NULL DEFAULT false,
+  output_merge_key TEXT NULL,
   PRIMARY KEY (from_task_id, to_task_id, type)
 );
 
@@ -97,6 +99,8 @@ CREATE TABLE IF NOT EXISTS task_template_edges (
   from_task_template_id TEXT NOT NULL REFERENCES task_templates(task_template_id),
   to_task_template_id TEXT NOT NULL REFERENCES task_templates(task_template_id),
   type TEXT NOT NULL,
+  inject_output BOOLEAN NOT NULL DEFAULT false,
+  output_merge_key TEXT NULL,
   PRIMARY KEY (from_task_template_id, to_task_template_id, type)
 );
 

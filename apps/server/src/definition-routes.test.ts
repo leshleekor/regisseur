@@ -309,6 +309,12 @@ function createDependencies() {
         runs.set(run.runId, run);
       }),
       findByTaskId: vi.fn(async () => Array.from(runs.values())),
+      findLatestSucceededByTaskId: vi.fn(
+        async (taskId: string) =>
+          Array.from(runs.values()).find(
+            (run) => run.taskId === taskId && run.status === "succeeded",
+          ) ?? null,
+      ),
       findByAgentId: vi.fn(async () => Array.from(runs.values())),
       findByStatus: vi.fn(async () => [] as Run[]),
       findById: vi.fn(async (runId: string) => runs.get(runId) ?? null),
@@ -768,5 +774,77 @@ describe("definition routes", () => {
     expect(ctx.state.taskTemplateEdges).toEqual([
       createTaskTemplateEdge("task-template-b", "task-template-c"),
     ]);
+  });
+
+  it("validates injection fields on task template edge routes", async () => {
+    const ctx = createDependencies();
+    ctx.state.workflowDefinitions.set(
+      "workflow-definition-1",
+      createWorkflowDefinition("workflow-definition-1"),
+    );
+    ctx.state.taskTemplates.set(
+      "task-template-a",
+      createTaskTemplate("task-template-a", "workflow-definition-1"),
+    );
+    ctx.state.taskTemplates.set(
+      "task-template-b",
+      createTaskTemplate("task-template-b", "workflow-definition-1"),
+    );
+    ctx.state.taskTemplates.set(
+      "task-template-c",
+      createTaskTemplate("task-template-c", "workflow-definition-1"),
+    );
+    app = buildApp(ctx.appDeps);
+
+    const missingKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-template-edges",
+      payload: {
+        fromTaskTemplateId: "task-template-a",
+        toTaskTemplateId: "task-template-b",
+        injectOutput: true,
+      },
+    });
+    const strayKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-template-edges",
+      payload: {
+        fromTaskTemplateId: "task-template-a",
+        toTaskTemplateId: "task-template-b",
+        outputMergeKey: "result",
+      },
+    });
+    const validResponse = await app.inject({
+      method: "POST",
+      url: "/task-template-edges",
+      payload: {
+        fromTaskTemplateId: "task-template-a",
+        toTaskTemplateId: "task-template-b",
+        injectOutput: true,
+        outputMergeKey: "result",
+      },
+    });
+    const duplicateKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-template-edges",
+      payload: {
+        fromTaskTemplateId: "task-template-c",
+        toTaskTemplateId: "task-template-b",
+        injectOutput: true,
+        outputMergeKey: "result",
+      },
+    });
+
+    expect(missingKeyResponse.statusCode).toBe(400);
+    expect(strayKeyResponse.statusCode).toBe(400);
+    expect(validResponse.statusCode).toBe(200);
+    expect(validResponse.json()).toEqual({
+      fromTaskTemplateId: "task-template-a",
+      toTaskTemplateId: "task-template-b",
+      type: "depends_on",
+      injectOutput: true,
+      outputMergeKey: "result",
+    });
+    expect(duplicateKeyResponse.statusCode).toBe(400);
   });
 });

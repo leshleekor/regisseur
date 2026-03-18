@@ -121,6 +121,21 @@ export class PostgresRunsRepository {
     return result.rows.map(mapRunRowToDomain);
   }
 
+  async findLatestSucceededByTaskId(taskId: string): Promise<Run | null> {
+    const result = await this.db.query<RunRow>(
+      `
+        SELECT * FROM runs
+        WHERE task_id = $1
+          AND status = 'succeeded'
+        ORDER BY finished_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+      `,
+      [taskId],
+    );
+
+    return result.rows[0] ? mapRunRowToDomain(result.rows[0]) : null;
+  }
+
   async findByAgentId(agentId: string): Promise<Run[]> {
     const result = await this.db.query<RunRow>(
       `SELECT * FROM runs WHERE agent_id = $1 ORDER BY created_at ASC`,

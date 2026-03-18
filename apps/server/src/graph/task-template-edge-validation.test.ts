@@ -41,11 +41,13 @@ function createTaskTemplate(
 function createEdge(
   fromTaskTemplateId: string,
   toTaskTemplateId: string,
+  overrides: Partial<TaskTemplateEdge> = {},
 ): TaskTemplateEdge {
   return {
     fromTaskTemplateId,
     toTaskTemplateId,
     type: "depends_on",
+    ...overrides,
   };
 }
 
@@ -256,6 +258,112 @@ describe("validateTaskTemplateEdgesForInsert", () => {
     ).rejects.toMatchObject({
       statusCode: 409,
       code: "TASK_TEMPLATE_EDGE_CYCLE",
+    });
+  });
+
+  it("rejects injectOutput=true without outputMergeKey", async () => {
+    const repositories = createRepositories({
+      taskTemplates: [
+        createTaskTemplate("task-template-a", "workflow-definition-1"),
+        createTaskTemplate("task-template-b", "workflow-definition-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskTemplateEdgesForInsert(
+        [
+          createEdge("task-template-a", "task-template-b", {
+            injectOutput: true,
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects outputMergeKey when injectOutput is disabled", async () => {
+    const repositories = createRepositories({
+      taskTemplates: [
+        createTaskTemplate("task-template-a", "workflow-definition-1"),
+        createTaskTemplate("task-template-b", "workflow-definition-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskTemplateEdgesForInsert(
+        [
+          createEdge("task-template-a", "task-template-b", {
+            outputMergeKey: "result",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects duplicate outputMergeKey for the same downstream template in the request", async () => {
+    const repositories = createRepositories({
+      taskTemplates: [
+        createTaskTemplate("task-template-a", "workflow-definition-1"),
+        createTaskTemplate("task-template-b", "workflow-definition-1"),
+        createTaskTemplate("task-template-c", "workflow-definition-1"),
+      ],
+    });
+
+    await expect(
+      validateTaskTemplateEdgesForInsert(
+        [
+          createEdge("task-template-a", "task-template-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+          createEdge("task-template-b", "task-template-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("rejects duplicate outputMergeKey that collides with an existing injected template edge", async () => {
+    const repositories = createRepositories({
+      taskTemplates: [
+        createTaskTemplate("task-template-a", "workflow-definition-1"),
+        createTaskTemplate("task-template-b", "workflow-definition-1"),
+        createTaskTemplate("task-template-c", "workflow-definition-1"),
+      ],
+      existingEdges: [
+        createEdge("task-template-a", "task-template-c", {
+          injectOutput: true,
+          outputMergeKey: "shared",
+        }),
+      ],
+    });
+
+    await expect(
+      validateTaskTemplateEdgesForInsert(
+        [
+          createEdge("task-template-b", "task-template-c", {
+            injectOutput: true,
+            outputMergeKey: "shared",
+          }),
+        ],
+        repositories,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "BAD_REQUEST",
     });
   });
 });

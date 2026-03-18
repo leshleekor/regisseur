@@ -17,10 +17,18 @@ export class PostgresTaskTemplateEdgesRepository {
         INSERT INTO task_template_edges (
           from_task_template_id,
           to_task_template_id,
-          type
-        ) VALUES ($1, $2, $3)
+          type,
+          inject_output,
+          output_merge_key
+        ) VALUES ($1, $2, $3, $4, $5)
       `,
-      [row.from_task_template_id, row.to_task_template_id, row.type],
+      [
+        row.from_task_template_id,
+        row.to_task_template_id,
+        row.type,
+        row.inject_output,
+        row.output_merge_key,
+      ],
     );
   }
 
@@ -32,11 +40,17 @@ export class PostgresTaskTemplateEdgesRepository {
     const values: unknown[] = [];
     const placeholders = edges.map((edge, index) => {
       const row = mapTaskTemplateEdgeToRowInput(edge);
-      const offset = index * 3;
+      const offset = index * 5;
 
-      values.push(row.from_task_template_id, row.to_task_template_id, row.type);
+      values.push(
+        row.from_task_template_id,
+        row.to_task_template_id,
+        row.type,
+        row.inject_output,
+        row.output_merge_key,
+      );
 
-      return `($${offset + 1}, $${offset + 2}, $${offset + 3})`;
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
     });
 
     await this.db.query(
@@ -44,7 +58,9 @@ export class PostgresTaskTemplateEdgesRepository {
         INSERT INTO task_template_edges (
           from_task_template_id,
           to_task_template_id,
-          type
+          type,
+          inject_output,
+          output_merge_key
         ) VALUES ${placeholders.join(", ")}
       `,
       values,

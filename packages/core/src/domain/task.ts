@@ -88,4 +88,8 @@ export interface TaskEdge {
   toTaskId: string;
   /** Relationship type between the two tasks. */
   type: TaskEdgeType;
+  /** Whether the upstream task output should be injected into the downstream payload. */
+  injectOutput?: boolean;
+  /** Payload key used when injecting the upstream output into the downstream task. */
+  outputMergeKey?: string;
 }

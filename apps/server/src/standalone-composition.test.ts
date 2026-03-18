@@ -4,6 +4,7 @@ import type {
   Queryable,
   ScheduleRow,
   TaskRow,
+  TaskEdgeRow,
   WorkflowRow,
 } from "@regisseur/store-postgres";
 import type {
@@ -43,6 +44,7 @@ function createInMemoryPool() {
   const agents = new Map<string, AgentRow>();
   const schedules = new Map<string, ScheduleRow>();
   const tasks = new Map<string, TaskRow>();
+  const taskEdges: TaskEdgeRow[] = [];
   const workflows = new Map<string, WorkflowRow>();
   let failNextQuery: (Error & { code?: string }) | null = null;
   const pool: Queryable & {
@@ -173,6 +175,20 @@ function createInMemoryPool() {
         ]);
       }
 
+      if (
+        sql ===
+        "SELECT * FROM task_edges WHERE from_task_id = ANY($1::text[]) AND to_task_id = ANY($1::text[]) ORDER BY from_task_id ASC, to_task_id ASC, type ASC"
+      ) {
+        const taskIds = new Set((values[0] as readonly string[]).map(String));
+
+        return createQueryResult(
+          taskEdges.filter(
+            (edge) =>
+              taskIds.has(edge.from_task_id) && taskIds.has(edge.to_task_id),
+          ),
+        );
+      }
+
       if (sql.includes("INSERT INTO tasks") && sql.includes("ON CONFLICT")) {
         const [
           taskId,
@@ -232,6 +248,7 @@ function createInMemoryPool() {
       agents,
       schedules,
       tasks,
+      taskEdges,
       workflows,
       setFailNextQuery(error: Error & { code?: string }) {
         failNextQuery = error;

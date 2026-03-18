@@ -44,4 +44,8 @@ export interface TaskTemplateEdge {
   toTaskTemplateId: string;
   /** Relationship type between the two templates. */
   type: TaskTemplateEdgeType;
+  /** Whether the upstream template output should be injected at runtime. */
+  injectOutput?: boolean;
+  /** Runtime payload key used for injecting the upstream output. */
+  outputMergeKey?: string;
 }

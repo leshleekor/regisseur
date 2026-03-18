@@ -126,6 +126,7 @@ export interface SchedulesRepositoryLike {
 export interface RunsRepositoryLike {
   upsert(run: Run): Promise<void>;
   findByTaskId(taskId: string): Promise<Run[]>;
+  findLatestSucceededByTaskId(taskId: string): Promise<Run | null>;
   findByAgentId(agentId: string): Promise<Run[]>;
   findByStatus(status: RunStatus): Promise<Run[]>;
   findById(runId: string): Promise<Run | null>;

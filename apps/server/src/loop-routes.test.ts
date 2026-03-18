@@ -169,6 +169,7 @@ function createDependencies() {
       runsRepository: {
         upsert: vi.fn(async () => undefined),
         findByTaskId: vi.fn(async () => [] as Run[]),
+        findLatestSucceededByTaskId: vi.fn(async () => null),
         findByAgentId: vi.fn(async () => [] as Run[]),
         findByStatus: vi.fn(async () => [] as Run[]),
         findById: vi.fn(async () => null),

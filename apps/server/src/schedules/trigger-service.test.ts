@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
   LoopDefinition,
+  Run,
   Schedule,
   Task,
   TaskEdge,
@@ -165,6 +166,7 @@ function createRepositories(options: {
       loopDefinition,
     ]),
   );
+  const runs = new Map<string, Run>();
   const agents = new Map(
     (options.agents ?? []).map((agent) => [agent.agentId, agent]),
   );
@@ -176,6 +178,7 @@ function createRepositories(options: {
       tasks,
       workflows,
       taskEdges: edges,
+      runs,
       workflowDefinitions,
       loopDefinitions,
       taskTemplates,
@@ -323,6 +326,32 @@ function createRepositories(options: {
         deleteByTaskTemplateId: vi.fn(async () => undefined),
         deleteEdge: vi.fn(async () => undefined),
       },
+      runsRepository: {
+        upsert: vi.fn(async (run: Run) => {
+          runs.set(run.runId, run);
+        }),
+        findByTaskId: vi.fn(async (taskId: string) =>
+          Array.from(runs.values()).filter((run) => run.taskId === taskId),
+        ),
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            Array.from(runs.values())
+              .filter(
+                (run) => run.taskId === taskId && run.status === "succeeded",
+              )
+              .sort((left, right) =>
+                (right.finishedAt ?? right.createdAt).localeCompare(
+                  left.finishedAt ?? left.createdAt,
+                ),
+              )[0] ?? null,
+        ),
+        findByAgentId: vi.fn(async (agentId: string) =>
+          Array.from(runs.values()).filter((run) => run.agentId === agentId),
+        ),
+        findByStatus: vi.fn(async () => [] as Run[]),
+        findById: vi.fn(async (runId: string) => runs.get(runId) ?? null),
+        deleteById: vi.fn(async () => undefined),
+      },
     },
   };
 }
@@ -419,6 +448,71 @@ describe("handleScheduleTrigger", () => {
       enabled: false,
       updatedAt: "2026-03-15T00:31:00.000Z",
     });
+  });
+
+  it("injects upstream output before dispatching a task-target schedule", async () => {
+    const schedule = createSchedule("schedule-1");
+    const upstreamTask = createTask("task-upstream", "workflow-1", {
+      status: "succeeded",
+    });
+    const task = createTask("task-1", "workflow-1", {
+      status: "ready",
+      payload: { original: true },
+    });
+    const workflow = createWorkflow("workflow-1");
+    const { repositories, state } = createRepositories({
+      schedules: [schedule],
+      tasks: [upstreamTask, task],
+      workflows: [workflow],
+      agents: [createAgent("agent-1")],
+      edges: [
+        {
+          fromTaskId: upstreamTask.taskId,
+          toTaskId: task.taskId,
+          type: "depends_on",
+          injectOutput: true,
+          outputMergeKey: "upstreamResult",
+        },
+      ],
+    });
+    state.runs.set("run-upstream", {
+      runId: "run-upstream",
+      taskId: upstreamTask.taskId,
+      agentId: "agent-1",
+      status: "succeeded",
+      output: { summary: "done" },
+      finishedAt: "2026-03-15T00:25:00.000Z",
+      createdAt: "2026-03-15T00:20:00.000Z",
+      updatedAt: "2026-03-15T00:25:00.000Z",
+    });
+    const { port } = createEnqueuePort();
+
+    const result = await handleScheduleTrigger(
+      {
+        scheduleId: "schedule-1",
+        targetType: "task",
+        targetId: "task-1",
+        triggeredAt: "2026-03-15T00:30:00.000Z",
+      },
+      repositories,
+      port,
+    );
+
+    expect(result).toEqual({
+      scheduleId: "schedule-1",
+      enqueuedTaskIds: ["task-1"],
+      skipped: false,
+    });
+    expect(state.tasks.get("task-1")).toMatchObject({
+      status: "queued",
+      payload: {
+        original: true,
+        upstreamResult: { summary: "done" },
+      },
+    });
+    expect(
+      repositories.runsRepository.findLatestSucceededByTaskId,
+    ).toHaveBeenCalledWith("task-upstream");
   });
 
   it("treats a once schedule as disabled on re-entry after it has already been handled", async () => {

@@ -61,11 +61,13 @@ function createTaskTemplate(
 function createTaskTemplateEdge(
   fromTaskTemplateId: string,
   toTaskTemplateId: string,
+  overrides: Partial<TaskTemplateEdge> = {},
 ): TaskTemplateEdge {
   return {
     fromTaskTemplateId,
     toTaskTemplateId,
     type: "depends_on",
+    ...overrides,
   };
 }
 
@@ -406,6 +408,69 @@ describe("materializeWorkflowDefinitionRun", () => {
       triggerSource: "schedule",
       triggeredByScheduleId: "schedule-1",
     });
+  });
+
+  it("copies injection settings from template edges into runtime edges", async () => {
+    const workflowDefinition = createWorkflowDefinition(
+      "workflow-definition-1",
+    );
+    const sourceTemplate = createTaskTemplate(
+      "task-template-source",
+      workflowDefinition.workflowDefinitionId,
+      {
+        defaultAssigneeAgentId: "agent-1",
+      },
+    );
+    const targetTemplate = createTaskTemplate(
+      "task-template-target",
+      workflowDefinition.workflowDefinitionId,
+    );
+    const { repositories, state } = createRepositories({
+      workflowDefinitions: [workflowDefinition],
+      taskTemplates: [sourceTemplate, targetTemplate],
+      taskTemplateEdges: [
+        createTaskTemplateEdge(
+          sourceTemplate.taskTemplateId,
+          targetTemplate.taskTemplateId,
+          {
+            injectOutput: true,
+            outputMergeKey: "sourceResult",
+          },
+        ),
+      ],
+      agents: [createAgent("agent-1")],
+    });
+
+    const result = await materializeWorkflowDefinitionRun(
+      workflowDefinition.workflowDefinitionId,
+      repositories,
+      {
+        enqueueTaskDispatch: vi.fn(async () => ({
+          ok: true as const,
+          jobId: "job-1",
+        })),
+      },
+      {
+        triggerSource: "manual",
+        now: () => "2026-03-16T00:05:00.000Z",
+        randomUUIDImpl: vi
+          .fn()
+          .mockReturnValueOnce("workflow-run-1")
+          .mockReturnValueOnce("task-run-1")
+          .mockReturnValueOnce("task-run-2"),
+      },
+    );
+
+    expect(result.taskEdges).toEqual([
+      {
+        fromTaskId: "task-run-1",
+        toTaskId: "task-run-2",
+        type: "depends_on",
+        injectOutput: true,
+        outputMergeKey: "sourceResult",
+      },
+    ]);
+    expect(state.taskEdges).toEqual(result.taskEdges);
   });
 
   it("stores loop provenance on iteration 1 materialized body tasks", async () => {

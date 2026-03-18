@@ -489,6 +489,18 @@ function createTestContext(): TestContext {
       (run) => run.taskId === taskId,
     );
   });
+  const runsFindLatestSucceededByTaskId = vi.fn(async (taskId: string) => {
+    callLog.push("runs.findLatestSucceededByTaskId");
+    return (
+      Array.from(state.runs.values())
+        .filter((run) => run.taskId === taskId && run.status === "succeeded")
+        .sort((left, right) =>
+          (right.finishedAt ?? right.createdAt).localeCompare(
+            left.finishedAt ?? left.createdAt,
+          ),
+        )[0] ?? null
+    );
+  });
   const runsFindByAgentId = vi.fn(async (agentId: string) => {
     callLog.push("runs.findByAgentId");
     return Array.from(state.runs.values()).filter(
@@ -582,6 +594,7 @@ function createTestContext(): TestContext {
   const runsRepository: RunsRepositoryLike = {
     upsert: runsUpsert,
     findByTaskId: runsFindByTaskId,
+    findLatestSucceededByTaskId: runsFindLatestSucceededByTaskId,
     findByAgentId: runsFindByAgentId,
     findByStatus: runsFindByStatus,
     findById: runsFindById,
@@ -710,6 +723,7 @@ function createTestContext(): TestContext {
       runs: {
         upsert: runsUpsert,
         findByTaskId: runsFindByTaskId,
+        findLatestSucceededByTaskId: runsFindLatestSucceededByTaskId,
         findByAgentId: runsFindByAgentId,
         findByStatus: runsFindByStatus,
         findById: runsFindById,
@@ -1683,6 +1697,8 @@ describe("server app", () => {
 
       expect(ctx.callLog).toEqual([
         "tasks.findById",
+        "tasks.findByWorkflowId",
+        "taskEdges.findAllByWorkflowTasks",
         "agents.findAll",
         "tasks.upsert",
         "workflows.findById",
@@ -1690,6 +1706,57 @@ describe("server app", () => {
         "workflows.upsert",
         "enqueuePort.enqueueTaskDispatch",
       ]);
+    });
+
+    it("POST /tasks/:taskId/dispatch injects upstream output into the queued payload", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
+      ctx.state.tasks.set(
+        "task-upstream",
+        createTask("task-upstream", "workflow-1", {
+          status: "succeeded",
+        }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          payload: { original: true },
+        }),
+      );
+      ctx.state.taskEdges.push({
+        fromTaskId: "task-upstream",
+        toTaskId: "task-1",
+        type: "depends_on",
+        injectOutput: true,
+        outputMergeKey: "upstreamResult",
+      });
+      ctx.state.runs.set(
+        "run-upstream",
+        createRun("run-upstream", "task-upstream", "agent-1", {
+          status: "succeeded",
+          output: { data: ["a", "b"] },
+          finishedAt: "2026-03-15T00:04:00.000Z",
+        }),
+      );
+      ctx.state.agents.set("agent-1", createAgent("agent-1"));
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/dispatch",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "queued",
+        payload: {
+          original: true,
+          upstreamResult: { data: ["a", "b"] },
+        },
+      });
+      expect(ctx.spies.runs.findLatestSucceededByTaskId).toHaveBeenCalledWith(
+        "task-upstream",
+      );
     });
   });
 

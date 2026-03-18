@@ -50,6 +50,7 @@ export function createDispatchWorker(
           options.repositories.taskTemplateEdgesRepository,
         loopDefinitionsRepository:
           options.repositories.loopDefinitionsRepository,
+        runsRepository: options.repositories.runsRepository,
       },
       enqueuePort: options.enqueuePort,
     }),

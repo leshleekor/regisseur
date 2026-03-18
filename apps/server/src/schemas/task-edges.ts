@@ -2,7 +2,9 @@ import { TASK_EDGE_TYPES, type TaskEdge } from "@regisseur/core";
 
 import { badRequest } from "../errors/http-error.js";
 import {
+  expectBoolean,
   expectEnumValue,
+  expectOptionalString,
   expectRecord,
   expectString,
 } from "../utils/parse-body.js";
@@ -17,6 +19,22 @@ function parseTaskEdgeRecord(value: unknown, fieldName: string): TaskEdge {
       body.type === undefined
         ? "depends_on"
         : expectEnumValue(body.type, TASK_EDGE_TYPES, `${fieldName}.type`),
+    ...(body.injectOutput !== undefined
+      ? {
+          injectOutput: expectBoolean(
+            body.injectOutput,
+            `${fieldName}.injectOutput`,
+          ),
+        }
+      : {}),
+    ...(body.outputMergeKey !== undefined
+      ? {
+          outputMergeKey: expectOptionalString(
+            body.outputMergeKey,
+            `${fieldName}.outputMergeKey`,
+          ),
+        }
+      : {}),
   };
 }
 

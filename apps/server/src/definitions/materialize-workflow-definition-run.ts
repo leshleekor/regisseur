@@ -142,6 +142,10 @@ function createRuntimeTaskEdge(
     fromTaskId: taskIdByTemplateId.get(taskTemplateEdge.fromTaskTemplateId)!,
     toTaskId: taskIdByTemplateId.get(taskTemplateEdge.toTaskTemplateId)!,
     type: taskTemplateEdge.type,
+    ...(taskTemplateEdge.injectOutput === true ? { injectOutput: true } : {}),
+    ...(taskTemplateEdge.outputMergeKey !== undefined
+      ? { outputMergeKey: taskTemplateEdge.outputMergeKey }
+      : {}),
   };
 }
 

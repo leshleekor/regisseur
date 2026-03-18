@@ -12,10 +12,12 @@ import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 
 import type {
   AgentsRepositoryLike,
+  RunsRepositoryLike,
   TaskEdgesRepositoryLike,
   TasksRepositoryLike,
   WorkflowsRepositoryLike,
 } from "../types.js";
+import { injectUpstreamOutputs } from "./inject-upstream-outputs.js";
 import {
   selectPersistAndEnqueue,
   type SelectPersistAndEnqueueResult,
@@ -47,6 +49,7 @@ export interface DynamicSpawnDirective {
 
 export interface DynamicExpansionRepositories {
   agentsRepository: AgentsRepositoryLike;
+  runsRepository: RunsRepositoryLike;
   tasksRepository: TasksRepositoryLike;
   taskEdgesRepository: TaskEdgesRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
@@ -553,9 +556,14 @@ export async function applyDynamicExpansion(
       continue;
     }
 
+    const injectedSpawnedTask = await injectUpstreamOutputs(
+      spawnedTask,
+      combinedEdges,
+      repositories.runsRepository,
+    );
     const result: SelectPersistAndEnqueueResult =
       await selectPersistAndEnqueueImpl(
-        spawnedTask,
+        injectedSpawnedTask,
         allAgents,
         {
           tasksRepository: repositories.tasksRepository,

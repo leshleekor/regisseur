@@ -5,7 +5,9 @@ import {
 
 import { badRequest } from "../errors/http-error.js";
 import {
+  expectBoolean,
   expectEnumValue,
+  expectOptionalString,
   expectRecord,
   expectString,
 } from "../utils/parse-body.js";
@@ -33,6 +35,22 @@ function parseTaskTemplateEdgeRecord(
             TASK_TEMPLATE_EDGE_TYPES,
             `${fieldName}.type`,
           ),
+    ...(body.injectOutput !== undefined
+      ? {
+          injectOutput: expectBoolean(
+            body.injectOutput,
+            `${fieldName}.injectOutput`,
+          ),
+        }
+      : {}),
+    ...(body.outputMergeKey !== undefined
+      ? {
+          outputMergeKey: expectOptionalString(
+            body.outputMergeKey,
+            `${fieldName}.outputMergeKey`,
+          ),
+        }
+      : {}),
   };
 }
 

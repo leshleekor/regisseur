@@ -7,10 +7,12 @@ import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 
 import type {
   AgentsRepositoryLike,
+  RunsRepositoryLike,
   TaskEdgesRepositoryLike,
   TasksRepositoryLike,
   WorkflowsRepositoryLike,
 } from "../types.js";
+import { injectUpstreamOutputs } from "./inject-upstream-outputs.js";
 import {
   selectPersistAndEnqueue,
   type SelectPersistAndEnqueueResult,
@@ -18,6 +20,7 @@ import {
 
 export interface GraphProgressionRepositories {
   agentsRepository: AgentsRepositoryLike;
+  runsRepository: RunsRepositoryLike;
   tasksRepository: TasksRepositoryLike;
   taskEdgesRepository: TaskEdgesRepositoryLike;
   workflowsRepository: WorkflowsRepositoryLike;
@@ -115,9 +118,14 @@ export async function progressDownstreamTasks(
     }
 
     try {
+      const injectedCandidate = await injectUpstreamOutputs(
+        candidate,
+        edges,
+        repositories.runsRepository,
+      );
       const result: SelectPersistAndEnqueueResult =
         await selectPersistAndEnqueueImpl(
-          candidate,
+          injectedCandidate,
           allAgents,
           repositories,
           enqueuePort,

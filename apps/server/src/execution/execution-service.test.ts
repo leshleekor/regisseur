@@ -188,6 +188,18 @@ function createRepositories(options: {
         findByTaskId: vi.fn(async (taskId: string) =>
           Array.from(runs.values()).filter((run) => run.taskId === taskId),
         ),
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            Array.from(runs.values())
+              .filter(
+                (run) => run.taskId === taskId && run.status === "succeeded",
+              )
+              .sort((left, right) =>
+                (right.finishedAt ?? right.createdAt).localeCompare(
+                  left.finishedAt ?? left.createdAt,
+                ),
+              )[0] ?? null,
+        ),
         findByAgentId: vi.fn(async (agentId: string) =>
           Array.from(runs.values()).filter((run) => run.agentId === agentId),
         ),

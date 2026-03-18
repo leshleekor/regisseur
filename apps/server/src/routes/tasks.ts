@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { badGateway, conflict, notFound } from "../errors/http-error.js";
+import { injectUpstreamOutputs } from "../execution/inject-upstream-outputs.js";
 import { selectPersistAndEnqueue } from "../execution/dispatch-persistence.js";
 import {
   parseTaskBody,
@@ -70,9 +71,23 @@ export function registerTaskRoutes(
       );
     }
 
+    const workflowTasks = await deps.tasksRepository.findByWorkflowId(
+      task.workflowId,
+    );
+    const workflowEdges =
+      workflowTasks.length === 0
+        ? []
+        : await deps.taskEdgesRepository.findAllByWorkflowTasks(
+            workflowTasks.map((workflowTask) => workflowTask.taskId),
+          );
+    const injectedTask = await injectUpstreamOutputs(
+      task,
+      workflowEdges,
+      deps.runsRepository,
+    );
     const agents = await deps.agentsRepository.findAll();
     const result = await selectPersistAndEnqueue(
-      task,
+      injectedTask,
       agents,
       {
         tasksRepository: deps.tasksRepository,

@@ -243,6 +243,7 @@ function createDependencies() {
     runsRepository: {
       upsert: vi.fn(async () => undefined),
       findByTaskId: vi.fn(async () => [] as Run[]),
+      findLatestSucceededByTaskId: vi.fn(async () => null),
       findByAgentId: vi.fn(async () => [] as Run[]),
       findByStatus: vi.fn(async () => [] as Run[]),
       findById: vi.fn(async () => null),
@@ -407,5 +408,65 @@ describe("task edge routes", () => {
         code: "CROSS_WORKFLOW_TASK_EDGE",
       },
     });
+  });
+
+  it("validates injection fields on task edge routes", async () => {
+    const ctx = createDependencies();
+    ctx.state.workflows.set("workflow-1", createWorkflow("workflow-1"));
+    ctx.state.tasks.set("task-a", createTask("task-a", "workflow-1"));
+    ctx.state.tasks.set("task-b", createTask("task-b", "workflow-1"));
+    ctx.state.tasks.set("task-c", createTask("task-c", "workflow-1"));
+    app = buildApp(ctx.appDeps);
+
+    const missingKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-edges",
+      payload: {
+        fromTaskId: "task-a",
+        toTaskId: "task-b",
+        injectOutput: true,
+      },
+    });
+    const strayKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-edges",
+      payload: {
+        fromTaskId: "task-a",
+        toTaskId: "task-b",
+        outputMergeKey: "result",
+      },
+    });
+    const validResponse = await app.inject({
+      method: "POST",
+      url: "/task-edges",
+      payload: {
+        fromTaskId: "task-a",
+        toTaskId: "task-b",
+        injectOutput: true,
+        outputMergeKey: "result",
+      },
+    });
+    const duplicateKeyResponse = await app.inject({
+      method: "POST",
+      url: "/task-edges",
+      payload: {
+        fromTaskId: "task-c",
+        toTaskId: "task-b",
+        injectOutput: true,
+        outputMergeKey: "result",
+      },
+    });
+
+    expect(missingKeyResponse.statusCode).toBe(400);
+    expect(strayKeyResponse.statusCode).toBe(400);
+    expect(validResponse.statusCode).toBe(200);
+    expect(validResponse.json()).toEqual({
+      fromTaskId: "task-a",
+      toTaskId: "task-b",
+      type: "depends_on",
+      injectOutput: true,
+      outputMergeKey: "result",
+    });
+    expect(duplicateKeyResponse.statusCode).toBe(400);
   });
 });

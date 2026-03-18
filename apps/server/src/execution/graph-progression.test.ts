@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentDefinition,
+  Run,
   Task,
   TaskEdge,
   Workflow,
@@ -63,15 +64,35 @@ function createEdge(fromTaskId: string, toTaskId: string): TaskEdge {
   };
 }
 
+function createRun(
+  runId: string,
+  taskId: string,
+  overrides: Partial<Run> = {},
+): Run {
+  return {
+    runId,
+    taskId,
+    agentId: "agent-1",
+    status: "succeeded",
+    output: { runId },
+    finishedAt: "2026-03-15T00:04:00.000Z",
+    createdAt: "2026-03-15T00:00:00.000Z",
+    updatedAt: "2026-03-15T00:04:00.000Z",
+    ...overrides,
+  };
+}
+
 function createRepositories(options: {
   tasks: readonly Task[];
   workflow: Workflow;
   agents: readonly AgentDefinition[];
   edges: readonly TaskEdge[];
+  runs?: readonly Run[];
 }) {
   const tasks = new Map(options.tasks.map((task) => [task.taskId, task]));
   const workflows = new Map([[options.workflow.workflowId, options.workflow]]);
   const agents = new Map(options.agents.map((agent) => [agent.agentId, agent]));
+  const runs = [...(options.runs ?? [])];
 
   return {
     state: {
@@ -90,6 +111,20 @@ function createRepositories(options: {
           agents.set(agent.agentId, agent);
         }),
         deleteById: vi.fn(async () => undefined),
+      },
+      runsRepository: {
+        findLatestSucceededByTaskId: vi.fn(
+          async (taskId: string) =>
+            runs
+              .filter(
+                (run) => run.taskId === taskId && run.status === "succeeded",
+              )
+              .sort((left, right) =>
+                (right.finishedAt ?? right.createdAt).localeCompare(
+                  left.finishedAt ?? left.createdAt,
+                ),
+              )[0] ?? null,
+        ),
       },
       tasksRepository: {
         findByWorkflowId: vi.fn(async (workflowId: string) =>
@@ -167,6 +202,86 @@ describe("progressDownstreamTasks", () => {
     expect(state.tasks.get("task-b")).toMatchObject({
       status: "queued",
       assigneeAgentId: "agent-1",
+    });
+  });
+
+  it("injects upstream output into downstream payload before enqueue", async () => {
+    const workflow = createWorkflow("workflow-1");
+    const taskA = createTask("task-a", workflow.workflowId, {
+      status: "succeeded",
+    });
+    const taskB = createTask("task-b", workflow.workflowId, {
+      status: "pending",
+      payload: { preserved: true },
+    });
+    const { state, repositories } = createRepositories({
+      tasks: [taskA, taskB],
+      workflow,
+      agents: [createAgent("agent-1")],
+      edges: [
+        {
+          ...createEdge(taskA.taskId, taskB.taskId),
+          injectOutput: true,
+          outputMergeKey: "upstreamResult",
+        },
+      ],
+      runs: [
+        createRun("run-a", taskA.taskId, {
+          output: { data: ["a", "b"] },
+        }),
+      ],
+    });
+
+    const result = await progressDownstreamTasks(
+      taskA,
+      repositories,
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+      },
+    );
+
+    expect(result.enqueuedTaskIds).toEqual(["task-b"]);
+    expect(state.tasks.get("task-b")?.payload).toEqual({
+      preserved: true,
+      upstreamResult: { data: ["a", "b"] },
+    });
+  });
+
+  it("skips injection when the upstream run is missing and still dispatches", async () => {
+    const workflow = createWorkflow("workflow-1");
+    const taskA = createTask("task-a", workflow.workflowId, {
+      status: "succeeded",
+    });
+    const taskB = createTask("task-b", workflow.workflowId, {
+      status: "pending",
+      payload: { preserved: true },
+    });
+    const { state, repositories } = createRepositories({
+      tasks: [taskA, taskB],
+      workflow,
+      agents: [createAgent("agent-1")],
+      edges: [
+        {
+          ...createEdge(taskA.taskId, taskB.taskId),
+          injectOutput: true,
+          outputMergeKey: "upstreamResult",
+        },
+      ],
+    });
+
+    const result = await progressDownstreamTasks(
+      taskA,
+      repositories,
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+      },
+    );
+
+    expect(result.enqueuedTaskIds).toEqual(["task-b"]);
+    expect(state.tasks.get("task-b")?.payload).toEqual({
+      preserved: true,
     });
   });
 

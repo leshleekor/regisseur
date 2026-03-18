@@ -3,6 +3,7 @@ import type { DispatchEnqueuePort } from "@regisseur/dispatcher";
 import type { ScheduleTriggerJobPayload } from "@regisseur/queue-bullmq";
 
 import { materializeWorkflowDefinitionRun } from "../definitions/materialize-workflow-definition-run.js";
+import { injectUpstreamOutputs } from "../execution/inject-upstream-outputs.js";
 import {
   selectPersistAndEnqueue,
   type SelectPersistAndEnqueueResult,
@@ -10,6 +11,7 @@ import {
 import type {
   AgentsRepositoryLike,
   LoopDefinitionsRepositoryLike,
+  RunsRepositoryLike,
   SchedulesRepositoryLike,
   TaskEdgesRepositoryLike,
   TaskTemplateEdgesRepositoryLike,
@@ -29,6 +31,7 @@ export interface ScheduleTriggerRepositories {
   taskTemplatesRepository: TaskTemplatesRepositoryLike;
   taskTemplateEdgesRepository: TaskTemplateEdgesRepositoryLike;
   loopDefinitionsRepository: LoopDefinitionsRepositoryLike;
+  runsRepository: RunsRepositoryLike;
 }
 
 export interface HandleScheduleTriggerResult {
@@ -96,10 +99,24 @@ async function triggerScheduledTask(
     return createSkippedResult(schedule.scheduleId, "TASK_NOT_READY");
   }
 
+  const workflowTasks = await repositories.tasksRepository.findByWorkflowId(
+    task.workflowId,
+  );
+  const workflowEdges =
+    workflowTasks.length === 0
+      ? []
+      : await repositories.taskEdgesRepository.findAllByWorkflowTasks(
+          workflowTasks.map((workflowTask) => workflowTask.taskId),
+        );
+  const injectedTask = await injectUpstreamOutputs(
+    task,
+    workflowEdges,
+    repositories.runsRepository,
+  );
   const allAgents = await getAllAgents(repositories);
   const result = assertEnqueueDidNotFail(
     await (options.selectPersistAndEnqueueImpl ?? selectPersistAndEnqueue)(
-      task,
+      injectedTask,
       allAgents,
       {
         tasksRepository: repositories.tasksRepository,
