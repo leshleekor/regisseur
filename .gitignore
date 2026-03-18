@@ -5,3 +5,5 @@ dist
 coverage
 .vitest
 pnpm-debug.log*
+
+.codex/*
