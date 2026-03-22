@@ -41,6 +41,12 @@ export interface WorkflowsRepositoryLike {
   findByStatus(status: WorkflowStatus): Promise<Workflow[]>;
   findById(workflowId: string): Promise<Workflow | null>;
   deleteById(workflowId: string): Promise<void>;
+  purgeById?(workflowId: string): Promise<{
+    workflowDeleted: boolean;
+    deletedTaskCount: number;
+    deletedRunCount: number;
+    deletedTaskEdgeCount: number;
+  }>;
 }
 
 export interface TasksRepositoryLike {

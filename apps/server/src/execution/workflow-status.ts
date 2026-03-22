@@ -7,6 +7,15 @@ export interface WorkflowStatusRepositories {
   workflowsRepository: WorkflowsRepositoryLike;
 }
 
+export interface UpdateWorkflowStatusOptions {
+  preserveTerminalStatuses?: readonly WorkflowStatus[];
+}
+
+const DEFAULT_PRESERVED_TERMINAL_STATUSES = [
+  "failed",
+  "cancelled",
+] as const satisfies readonly WorkflowStatus[];
+
 export function deriveWorkflowStatus(tasks: readonly Task[]): WorkflowStatus {
   if (tasks.some((task) => task.status === "failed")) {
     return "failed";
@@ -22,6 +31,16 @@ export function deriveWorkflowStatus(tasks: readonly Task[]): WorkflowStatus {
     return "succeeded";
   }
 
+  if (
+    tasks.length > 0 &&
+    tasks.every(
+      (task) => task.status === "succeeded" || task.status === "cancelled",
+    ) &&
+    tasks.some((task) => task.status === "cancelled")
+  ) {
+    return "cancelled";
+  }
+
   return "pending";
 }
 
@@ -29,6 +48,7 @@ export async function updateWorkflowStatus(
   workflowId: string,
   repositories: WorkflowStatusRepositories,
   now: string = new Date().toISOString(),
+  options: UpdateWorkflowStatusOptions = {},
 ): Promise<Workflow | null> {
   const [workflow, tasks] = await Promise.all([
     repositories.workflowsRepository.findById(workflowId),
@@ -40,8 +60,13 @@ export async function updateWorkflowStatus(
   }
 
   const status = deriveWorkflowStatus(tasks);
+  const preservedTerminalStatuses = new Set<WorkflowStatus>(
+    options.preserveTerminalStatuses ?? DEFAULT_PRESERVED_TERMINAL_STATUSES,
+  );
   const terminalStatus =
-    workflow.status === "failed" && status !== "failed" ? "failed" : status;
+    preservedTerminalStatuses.has(workflow.status) && workflow.status !== status
+      ? workflow.status
+      : status;
   const updatedWorkflow =
     workflow.status === terminalStatus
       ? workflow

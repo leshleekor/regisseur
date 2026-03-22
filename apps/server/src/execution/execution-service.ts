@@ -56,6 +56,9 @@ export type ExecuteTaskLifecycleResult =
       message: string;
       reason:
         | "TASK_NOT_FOUND"
+        | "TASK_CANCELLED"
+        | "TASK_NOT_EXECUTABLE"
+        | "WORKFLOW_CANCELLED"
         | "AGENT_NOT_FOUND"
         | "ADAPTER_NOT_FOUND"
         | "EXECUTION_FAILED";
@@ -126,6 +129,33 @@ async function persistFailedTaskWithoutRun(
   return failedTask;
 }
 
+async function persistCancelledTaskWithoutRun(
+  task: Task,
+  repositories: Pick<
+    ExecutionServiceRepositories,
+    "tasksRepository" | "workflowsRepository"
+  >,
+  now: string,
+  updateWorkflowStatusImpl: typeof updateWorkflowStatus,
+): Promise<Task> {
+  const cancelledTask: Task =
+    task.status === "cancelled"
+      ? task
+      : {
+          ...task,
+          status: "cancelled",
+          updatedAt: now,
+        };
+
+  if (cancelledTask !== task) {
+    await repositories.tasksRepository.upsert(cancelledTask);
+  }
+
+  await updateWorkflowStatusImpl(task.workflowId, repositories, now);
+
+  return cancelledTask;
+}
+
 async function persistRunAndTaskFailure(
   run: Run,
   task: Task,
@@ -190,6 +220,41 @@ export async function executeTaskLifecycle(
       ok: false,
       reason: "TASK_NOT_FOUND",
       message: `Task ${payload.taskId} not found for queued job`,
+    };
+  }
+
+  if (task.status === "cancelled") {
+    return {
+      ok: false,
+      reason: "TASK_CANCELLED",
+      message: `Task ${task.taskId} is cancelled and cannot be executed`,
+    };
+  }
+
+  if (task.status !== "queued") {
+    return {
+      ok: false,
+      reason: "TASK_NOT_EXECUTABLE",
+      message: `Task ${task.taskId} is not queued for execution (status: ${task.status})`,
+    };
+  }
+
+  const workflow = await repositories.workflowsRepository.findById(
+    task.workflowId,
+  );
+
+  if (workflow?.status === "cancelled") {
+    await persistCancelledTaskWithoutRun(
+      task,
+      repositories,
+      now(),
+      updateWorkflowStatusImpl,
+    );
+
+    return {
+      ok: false,
+      reason: "WORKFLOW_CANCELLED",
+      message: `Workflow ${task.workflowId} is cancelled; task ${task.taskId} will not execute`,
     };
   }
 
@@ -293,7 +358,7 @@ export async function executeTaskLifecycle(
 
   await repositories.runsRepository.upsert(succeededRun);
   await repositories.tasksRepository.upsert(succeededTask);
-  const workflow = await repositories.workflowsRepository.findById(
+  const latestWorkflow = await repositories.workflowsRepository.findById(
     task.workflowId,
   );
   const controllerLoopDefinition = await findControllerLoopDefinition(
@@ -304,7 +369,17 @@ export async function executeTaskLifecycle(
     executionResult.output,
   );
 
-  if (!workflow) {
+  if (!latestWorkflow) {
+    return {
+      ok: true,
+      run: succeededRun,
+      task: succeededTask,
+    };
+  }
+
+  if (latestWorkflow.status === "cancelled") {
+    await updateWorkflowStatusImpl(task.workflowId, repositories, now());
+
     return {
       ok: true,
       run: succeededRun,
@@ -314,7 +389,7 @@ export async function executeTaskLifecycle(
 
   if (!dynamicSpawnDirectiveResult.ok) {
     await repositories.workflowsRepository.upsert({
-      ...workflow,
+      ...latestWorkflow,
       status: "failed",
       updatedAt: now(),
     });
@@ -332,7 +407,7 @@ export async function executeTaskLifecycle(
     if (dynamicSpawnDirective !== null) {
       const dynamicExpansionResult = await applyDynamicExpansionImpl(
         succeededTask,
-        workflow,
+        latestWorkflow,
         dynamicSpawnDirective,
         repositories,
         enqueuePort,
@@ -344,7 +419,7 @@ export async function executeTaskLifecycle(
 
       if (!dynamicExpansionResult.ok) {
         await repositories.workflowsRepository.upsert({
-          ...workflow,
+          ...latestWorkflow,
           status: "failed",
           updatedAt: now(),
         });
@@ -378,7 +453,7 @@ export async function executeTaskLifecycle(
 
   if (dynamicSpawnDirective !== null) {
     await repositories.workflowsRepository.upsert({
-      ...workflow,
+      ...latestWorkflow,
       status: "failed",
       updatedAt: now(),
     });
@@ -394,7 +469,7 @@ export async function executeTaskLifecycle(
     const expansionResult = await expandLoopIterationImpl(
       succeededTask,
       controllerLoopDefinition,
-      workflow,
+      latestWorkflow,
       repositories,
       enqueuePort,
       {
@@ -405,7 +480,7 @@ export async function executeTaskLifecycle(
 
     if (!expansionResult.ok) {
       await repositories.workflowsRepository.upsert({
-        ...workflow,
+        ...latestWorkflow,
         status: "failed",
         updatedAt: now(),
       });
