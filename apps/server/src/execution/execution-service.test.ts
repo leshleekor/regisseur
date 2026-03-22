@@ -532,6 +532,149 @@ describe("executeTaskLifecycle", () => {
     });
   });
 
+  it("skips adapter execution when the queued job references a cancelled task", async () => {
+    const task = createTask("task-1", "workflow-1", {
+      status: "cancelled",
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "running" });
+    const agent = createAgent("agent-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const execute = vi.fn();
+
+    const result = await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute,
+        },
+      },
+      createEnqueuePort(),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "TASK_CANCELLED",
+      message: "Task task-1 is cancelled and cannot be executed",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(state.runs.size).toBe(0);
+    expect(state.tasks.get("task-1")).toMatchObject({
+      status: "cancelled",
+    });
+  });
+
+  it("skips adapter execution and cancels the queued task when the workflow is cancelled", async () => {
+    const task = createTask("task-1", "workflow-1", {
+      status: "queued",
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "cancelled" });
+    const agent = createAgent("agent-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const execute = vi.fn();
+
+    const result = await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute,
+        },
+      },
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "WORKFLOW_CANCELLED",
+      message:
+        "Workflow workflow-1 is cancelled; task task-1 will not execute",
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(state.runs.size).toBe(0);
+    expect(state.tasks.get("task-1")).toMatchObject({
+      status: "cancelled",
+      updatedAt: "2026-03-15T00:05:00.000Z",
+    });
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "cancelled",
+    });
+  });
+
+  it("does not progress downstream when the workflow is cancelled while the task is already running", async () => {
+    const task = createTask("task-1", "workflow-1", {
+      assigneeAgentId: "agent-1",
+    });
+    const workflow = createWorkflow("workflow-1", { status: "running" });
+    const agent = createAgent("agent-1");
+    const { state, repositories } = createRepositories({
+      task,
+      workflow,
+      agent,
+    });
+    const progressDownstreamTasksImpl = vi.fn();
+
+    const result = await executeTaskLifecycle(
+      createPayload(task),
+      repositories,
+      {
+        cli: {
+          runtimeType: "cli",
+          execute: vi.fn(async () => {
+            state.workflows.set(
+              "workflow-1",
+              createWorkflow("workflow-1", {
+                status: "cancelled",
+              }),
+            );
+
+            return {
+              ok: true as const,
+              output: { result: "done" },
+            };
+          }),
+        },
+      },
+      createEnqueuePort(),
+      {
+        now: () => "2026-03-15T00:05:00.000Z",
+        randomUUIDImpl: () => "run-1",
+        progressDownstreamTasksImpl,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      task: {
+        taskId: "task-1",
+        status: "succeeded",
+      },
+      run: {
+        runId: "run-1",
+        status: "succeeded",
+      },
+    });
+    expect(progressDownstreamTasksImpl).not.toHaveBeenCalled();
+    expect(state.workflows.get("workflow-1")).toMatchObject({
+      status: "cancelled",
+    });
+  });
+
   it("fails the task and workflow without creating a run when assigneeAgentId is missing", async () => {
     const task = createTask("task-1", "workflow-1");
     const workflow = createWorkflow("workflow-1", { status: "running" });

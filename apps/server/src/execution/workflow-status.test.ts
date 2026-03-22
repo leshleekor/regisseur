@@ -83,6 +83,15 @@ describe("deriveWorkflowStatus", () => {
       ]),
     ).toBe("succeeded");
   });
+
+  it("returns cancelled when all tasks are terminal and at least one is cancelled", () => {
+    expect(
+      deriveWorkflowStatus([
+        createTask("task-1", "workflow-1", { status: "succeeded" }),
+        createTask("task-2", "workflow-1", { status: "cancelled" }),
+      ]),
+    ).toBe("cancelled");
+  });
 });
 
 describe("updateWorkflowStatus", () => {
@@ -171,5 +180,69 @@ describe("updateWorkflowStatus", () => {
 
     expect(updatedWorkflow).toBe(workflow);
     expect(repositories.workflowsRepository.upsert).not.toHaveBeenCalled();
+  });
+
+  it("preserves cancelled workflow status as terminal even when task aggregate changes", async () => {
+    const workflow = createWorkflow("workflow-1", { status: "cancelled" });
+    const repositories = {
+      workflowsRepository: {
+        findById: vi.fn(async () => workflow),
+        upsert: vi.fn(async () => undefined),
+      },
+      tasksRepository: {
+        findByWorkflowId: vi.fn(async () => [
+          createTask("task-1", "workflow-1", { status: "succeeded" }),
+          createTask("task-2", "workflow-1", { status: "running" }),
+        ]),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
+      },
+    };
+
+    const updatedWorkflow = await updateWorkflowStatus(
+      workflow.workflowId,
+      repositories,
+      "2026-03-15T00:05:00.000Z",
+    );
+
+    expect(updatedWorkflow).toBe(workflow);
+    expect(repositories.workflowsRepository.upsert).not.toHaveBeenCalled();
+  });
+
+  it("can release failed workflow status when recovery explicitly disables failed preservation", async () => {
+    const workflow = createWorkflow("workflow-1", { status: "failed" });
+    const repositories = {
+      workflowsRepository: {
+        findById: vi.fn(async () => workflow),
+        upsert: vi.fn(async () => undefined),
+      },
+      tasksRepository: {
+        findByWorkflowId: vi.fn(async () => [
+          createTask("task-1", "workflow-1", { status: "ready" }),
+          createTask("task-2", "workflow-1", { status: "succeeded" }),
+        ]),
+        countByWorkflowIdAndGenerationSource: vi.fn(async () => 0),
+      },
+    };
+
+    const updatedWorkflow = await updateWorkflowStatus(
+      workflow.workflowId,
+      repositories,
+      "2026-03-15T00:05:00.000Z",
+      {
+        preserveTerminalStatuses: ["cancelled"],
+      },
+    );
+
+    expect(updatedWorkflow).toEqual({
+      ...workflow,
+      status: "pending",
+      updatedAt: "2026-03-15T00:05:00.000Z",
+    });
+    expect(repositories.workflowsRepository.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowId: "workflow-1",
+        status: "pending",
+      }),
+    );
   });
 });

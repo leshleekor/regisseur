@@ -219,6 +219,45 @@ function createTestContext(): TestContext {
     callLog.push("workflows.deleteById");
     state.workflows.delete(workflowId);
   });
+  const workflowsPurgeById = vi.fn(async (workflowId: string) => {
+    callLog.push("workflows.purgeById");
+    const workflowTasks = Array.from(state.tasks.values()).filter(
+      (task) => task.workflowId === workflowId,
+    );
+    const workflowTaskIds = new Set(workflowTasks.map((task) => task.taskId));
+    const deletedTaskEdgeCount = state.taskEdges.filter(
+      (edge) =>
+        workflowTaskIds.has(edge.fromTaskId) || workflowTaskIds.has(edge.toTaskId),
+    ).length;
+    const deletedRunCount = Array.from(state.runs.values()).filter((run) =>
+      workflowTaskIds.has(run.taskId),
+    ).length;
+
+    state.taskEdges = state.taskEdges.filter(
+      (edge) =>
+        !workflowTaskIds.has(edge.fromTaskId) &&
+        !workflowTaskIds.has(edge.toTaskId),
+    );
+
+    for (const run of Array.from(state.runs.values())) {
+      if (workflowTaskIds.has(run.taskId)) {
+        state.runs.delete(run.runId);
+      }
+    }
+
+    for (const task of workflowTasks) {
+      state.tasks.delete(task.taskId);
+    }
+
+    const workflowDeleted = state.workflows.delete(workflowId);
+
+    return {
+      workflowDeleted,
+      deletedTaskCount: workflowTasks.length,
+      deletedRunCount,
+      deletedTaskEdgeCount,
+    };
+  });
 
   const tasksUpsert = vi.fn(async (task: Task) => {
     callLog.push("tasks.upsert");
@@ -535,6 +574,7 @@ function createTestContext(): TestContext {
     findByStatus: workflowsFindByStatus,
     findById: workflowsFindById,
     deleteById: workflowsDeleteById,
+    purgeById: workflowsPurgeById,
   };
   const tasksRepository: TasksRepositoryLike = {
     upsert: tasksUpsert,
@@ -666,6 +706,7 @@ function createTestContext(): TestContext {
         findByStatus: workflowsFindByStatus,
         findById: workflowsFindById,
         deleteById: workflowsDeleteById,
+        purgeById: workflowsPurgeById,
       },
       tasks: {
         upsert: tasksUpsert,
@@ -1149,6 +1190,146 @@ describe("server app", () => {
       });
 
       expect(response.statusCode).toBe(404);
+    });
+
+    it("POST /workflows/:workflowId/cancel cancels non-running tasks and marks the workflow cancelled", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "running" }),
+      );
+      ctx.state.tasks.set(
+        "task-ready",
+        createTask("task-ready", "workflow-1", { status: "ready" }),
+      );
+      ctx.state.tasks.set(
+        "task-queued",
+        createTask("task-queued", "workflow-1", { status: "queued" }),
+      );
+      ctx.state.tasks.set(
+        "task-running",
+        createTask("task-running", "workflow-1", { status: "running" }),
+      );
+      ctx.state.tasks.set(
+        "task-succeeded",
+        createTask("task-succeeded", "workflow-1", { status: "succeeded" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/workflows/workflow-1/cancel",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        workflowId: "workflow-1",
+        status: "cancelled",
+        cancelledTaskIds: ["task-ready", "task-queued"],
+        skippedRunningTaskIds: ["task-running"],
+      });
+      expect(ctx.state.workflows.get("workflow-1")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.state.tasks.get("task-ready")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.state.tasks.get("task-queued")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.state.tasks.get("task-running")).toMatchObject({
+        status: "running",
+      });
+    });
+
+    it("POST /workflows/:workflowId/cancel rejects terminal workflows", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/workflows/workflow-1/cancel",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(
+        responseJson<{ error: { code: string } }>(response).error.code,
+      ).toBe("WORKFLOW_CANCEL_NOT_ALLOWED");
+    });
+
+    it("POST /workflows/:workflowId/purge removes runtime rows for a terminal workflow", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      ctx.state.tasks.set("task-1", createTask("task-1", "workflow-1"));
+      ctx.state.tasks.set("task-2", createTask("task-2", "workflow-1"));
+      ctx.state.taskEdges.push({
+        fromTaskId: "task-1",
+        toTaskId: "task-2",
+        type: "depends_on",
+        injectOutput: false,
+      });
+      ctx.state.runs.set("run-1", createRun("run-1", "task-1", "agent-1"));
+      ctx.state.workflowDefinitions.set("definition-1", {
+        workflowDefinitionId: "definition-1",
+        name: "definition-1",
+        enabled: true,
+        createdAt: "2026-03-15T00:00:00.000Z",
+        updatedAt: "2026-03-15T00:00:00.000Z",
+      });
+      ctx.state.schedules.set(
+        "schedule-1",
+        createSchedule("schedule-1", {
+          targetId: "workflow-definition-1",
+        }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/workflows/workflow-1/purge",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        workflowId: "workflow-1",
+        purged: true,
+        deletedTaskCount: 2,
+        deletedRunCount: 1,
+        deletedTaskEdgeCount: 1,
+      });
+      expect(ctx.state.workflows.has("workflow-1")).toBe(false);
+      expect(ctx.state.tasks.size).toBe(0);
+      expect(ctx.state.runs.size).toBe(0);
+      expect(ctx.state.taskEdges).toHaveLength(0);
+      expect(ctx.state.workflowDefinitions.has("definition-1")).toBe(true);
+      expect(ctx.state.schedules.has("schedule-1")).toBe(true);
+      expect(ctx.spies.workflows.purgeById).toHaveBeenCalledWith("workflow-1");
+    });
+
+    it("POST /workflows/:workflowId/purge rejects non-terminal workflows", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "running" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/workflows/workflow-1/purge",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(
+        responseJson<{ error: { code: string } }>(response).error.code,
+      ).toBe("WORKFLOW_PURGE_NOT_ALLOWED");
     });
 
     it("DELETE /workflows/:workflowId returns 204", async () => {
@@ -1697,6 +1878,7 @@ describe("server app", () => {
 
       expect(ctx.callLog).toEqual([
         "tasks.findById",
+        "workflows.findById",
         "tasks.findByWorkflowId",
         "taskEdges.findAllByWorkflowTasks",
         "agents.findAll",
@@ -1757,6 +1939,258 @@ describe("server app", () => {
       expect(ctx.spies.runs.findLatestSucceededByTaskId).toHaveBeenCalledWith(
         "task-upstream",
       );
+    });
+  });
+
+  describe("Task control API", () => {
+    it("POST /tasks/:taskId/reset resets a failed task to ready and clears failed workflow status", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", { status: "failed" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/reset",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        taskId: "task-1",
+        workflowId: "workflow-1",
+        status: "ready",
+        dispatched: false,
+        runEnqueued: false,
+      });
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "ready",
+      });
+      expect(ctx.state.workflows.get("workflow-1")).toMatchObject({
+        status: "pending",
+      });
+    });
+
+    it("POST /tasks/:taskId/reset can dispatch immediately after recovery", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          status: "failed",
+          assigneeAgentId: "agent-1",
+        }),
+      );
+      ctx.state.agents.set("agent-1", createAgent("agent-1"));
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/reset",
+        payload: {
+          dispatch: true,
+          triggerSource: "manual",
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        taskId: "task-1",
+        workflowId: "workflow-1",
+        status: "queued",
+        dispatched: true,
+        runEnqueued: true,
+        agentId: "agent-1",
+      });
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "queued",
+      });
+      expect(ctx.state.workflows.get("workflow-1")).toMatchObject({
+        status: "running",
+      });
+      expect(ctx.spies.enqueueTaskDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("POST /tasks/:taskId/reset returns dispatch failure details without losing the reset", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          status: "failed",
+          assigneeAgentId: "missing-agent",
+        }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/reset",
+        payload: {
+          dispatch: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        taskId: "task-1",
+        workflowId: "workflow-1",
+        status: "ready",
+        dispatched: false,
+        runEnqueued: false,
+        dispatchFailure: {
+          reason: "ASSIGNEE_NOT_FOUND",
+          message:
+            "Task task-1 references missing assignee missing-agent",
+        },
+      });
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "ready",
+      });
+      expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
+    });
+
+    it("POST /tasks/:taskId/reset cleans up a ready task when the workflow is cancelled during redispatch", async () => {
+      const ctx = createTestContext();
+      let workflowFindByIdCalls = 0;
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "failed" }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", {
+          status: "failed",
+          assigneeAgentId: "agent-1",
+        }),
+      );
+      ctx.state.agents.set("agent-1", createAgent("agent-1"));
+      ctx.deps.workflowsRepository.findById = vi.fn(async (workflowId: string) => {
+        workflowFindByIdCalls += 1;
+
+        if (workflowFindByIdCalls === 3) {
+          const cancelledWorkflow = {
+            ...(ctx.state.workflows.get(workflowId) ?? createWorkflow(workflowId)),
+            status: "cancelled" as const,
+            updatedAt: "2026-03-15T00:06:00.000Z",
+          };
+
+          ctx.state.workflows.set(workflowId, cancelledWorkflow);
+
+          return cancelledWorkflow;
+        }
+
+        return ctx.state.workflows.get(workflowId) ?? null;
+      });
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/reset",
+        payload: {
+          dispatch: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson(response)).toEqual({
+        taskId: "task-1",
+        workflowId: "workflow-1",
+        status: "cancelled",
+        dispatched: false,
+        runEnqueued: false,
+        dispatchFailure: {
+          reason: "WORKFLOW_CANCELLED",
+          message:
+            "Workflow workflow-1 is cancelled and cannot dispatch new tasks",
+        },
+      });
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.state.workflows.get("workflow-1")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.spies.enqueueTaskDispatch).not.toHaveBeenCalled();
+    });
+
+    it("POST /tasks/:taskId/reset rejects non-resettable states", async () => {
+      const ctx = createTestContext();
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", { status: "running" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/reset",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(
+        responseJson<{ error: { code: string } }>(response).error.code,
+      ).toBe("TASK_RECOVERY_NOT_ALLOWED");
+    });
+
+    it("POST /tasks/:taskId/cancel cancels a queued task and updates workflow status", async () => {
+      const ctx = createTestContext();
+      ctx.state.workflows.set(
+        "workflow-1",
+        createWorkflow("workflow-1", { status: "running" }),
+      );
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", { status: "queued" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/cancel",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(responseJson<Task>(response)).toMatchObject({
+        taskId: "task-1",
+        status: "cancelled",
+      });
+      expect(ctx.state.tasks.get("task-1")).toMatchObject({
+        status: "cancelled",
+      });
+      expect(ctx.state.workflows.get("workflow-1")).toMatchObject({
+        status: "cancelled",
+      });
+    });
+
+    it("POST /tasks/:taskId/cancel rejects running tasks", async () => {
+      const ctx = createTestContext();
+      ctx.state.tasks.set(
+        "task-1",
+        createTask("task-1", "workflow-1", { status: "running" }),
+      );
+      app = buildApp(ctx.deps);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/tasks/task-1/cancel",
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(
+        responseJson<{ error: { code: string } }>(response).error.code,
+      ).toBe("TASK_CANCEL_NOT_ALLOWED");
     });
   });
 

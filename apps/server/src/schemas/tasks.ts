@@ -9,6 +9,7 @@ import {
 
 import { badRequest } from "../errors/http-error.js";
 import {
+  expectBoolean,
   expectEnumValue,
   expectObject,
   expectOptionalObject,
@@ -26,6 +27,11 @@ export type TasksQuery =
     };
 
 export interface TaskDispatchBody {
+  triggerSource: DispatchTriggerSource;
+}
+
+export interface TaskResetBody {
+  dispatch: boolean;
   triggerSource: DispatchTriggerSource;
 }
 
@@ -98,6 +104,32 @@ export function parseTaskDispatchBody(value: unknown): TaskDispatchBody {
   const body = expectRecord(value, "body");
 
   return {
+    triggerSource:
+      body.triggerSource === undefined
+        ? "manual"
+        : expectEnumValue(
+            body.triggerSource,
+            DISPATCH_TRIGGER_SOURCES,
+            "triggerSource",
+      ),
+  };
+}
+
+export function parseTaskResetBody(value: unknown): TaskResetBody {
+  if (value === undefined) {
+    return {
+      dispatch: false,
+      triggerSource: "manual",
+    };
+  }
+
+  const body = expectRecord(value, "body");
+
+  return {
+    dispatch:
+      body.dispatch === undefined
+        ? false
+        : expectBoolean(body.dispatch, "dispatch"),
     triggerSource:
       body.triggerSource === undefined
         ? "manual"
