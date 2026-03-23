@@ -9,7 +9,7 @@ export function Label({
   return (
     <label
       className={cn(
-        "text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]",
+        "text-sm font-medium leading-none text-[color:var(--foreground)]",
         className,
       )}
       {...props}

@@ -3,6 +3,7 @@ import type {
   LoopDefinition,
   Run,
   Schedule,
+  TaskEdge,
   Task,
   TaskTemplate,
   TaskTemplateEdge,
@@ -24,8 +25,9 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type JSX, type ReactNode } from "react";
 
+import { useConfirmDialog, useToast } from "@/components/app/feedback";
 import { JsonEditor } from "@/components/forms/json-editor";
 import { KeyValueEditor } from "@/components/forms/key-value-editor";
 import { PromptEditor } from "@/components/forms/prompt-editor";
@@ -47,7 +49,22 @@ import {
 } from "@/components/ui/primitives";
 import { api } from "@/lib/api";
 import { normalizeError } from "@/lib/errors";
+import {
+  buildTaskRunSummaries,
+  collectDownstreamBlockedTasks,
+  payloadChanged,
+  reconstructInjectedPayload,
+} from "@/lib/runtime-analysis";
 import { createId, createTimestamp } from "@/lib/ids";
+import {
+  buildWorkflowDefinitionBundle,
+  cloneWorkflowDefinitionBundle,
+  getRequiredCapabilities,
+  parseWorkflowDefinitionImport,
+  workflowDefinitionStartPreflight,
+  type PreflightFinding,
+  type WorkflowDefinitionBundle,
+} from "@/lib/workflow-definition-tools";
 import { asPrettyJson, copyText, formatDateTime, sortByUpdatedAtDescending } from "@/lib/utils";
 
 function useUnsavedChangesGuard(isDirty: boolean): void {
@@ -130,12 +147,6 @@ function statusTone(
   }
 }
 
-function copyJson(value: unknown): void {
-  void copyText(asPrettyJson(value)).catch((error) => {
-    window.alert(normalizeError(error));
-  });
-}
-
 function exportJson(filename: string, value: unknown): void {
   const blob = new Blob([asPrettyJson(value)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -144,62 +155,6 @@ function exportJson(filename: string, value: unknown): void {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function countDefinitionRoots(
-  taskTemplates: readonly TaskTemplate[],
-  edges: readonly TaskTemplateEdge[],
-): number {
-  const blocked = new Set(edges.map((edge) => edge.toTaskTemplateId));
-
-  return taskTemplates.filter((taskTemplate) => !blocked.has(taskTemplate.taskTemplateId)).length;
-}
-
-function workflowDefinitionStartPreflight({
-  definition,
-  taskTemplates,
-  edges,
-  agents,
-}: {
-  definition: WorkflowDefinition;
-  taskTemplates: readonly TaskTemplate[];
-  edges: readonly TaskTemplateEdge[];
-  agents: readonly AgentDefinition[];
-}): string[] {
-  const findings: string[] = [];
-
-  if (!definition.enabled) {
-    findings.push("Definition is disabled.");
-  }
-
-  if (taskTemplates.length === 0) {
-    findings.push("At least one task template is required.");
-  }
-
-  if (taskTemplates.length > 0 && countDefinitionRoots(taskTemplates, edges) === 0) {
-    findings.push("A root task is required.");
-  }
-
-  const agentMap = new Map(agents.map((agent) => [agent.agentId, agent]));
-  for (const taskTemplate of taskTemplates) {
-    const assignee = taskTemplate.defaultAssigneeAgentId;
-
-    if (!assignee) {
-      continue;
-    }
-
-    const agent = agentMap.get(assignee);
-    if (!agent) {
-      findings.push(`${taskTemplate.title}: assignee ${assignee} does not exist.`);
-      continue;
-    }
-
-    if (!agent.enabled) {
-      findings.push(`${taskTemplate.title}: assignee ${assignee} is disabled.`);
-    }
-  }
-
-  return findings;
 }
 
 function fieldSection(
@@ -216,6 +171,91 @@ function fieldSection(
   );
 }
 
+function useConsoleFeedback(): {
+  notifyError: (error: unknown, title?: string) => void;
+  notifySuccess: (description: string, title?: string) => void;
+  notifyInfo: (description: string, title?: string) => void;
+  confirmAction: ReturnType<typeof useConfirmDialog>;
+  copyJson: (value: unknown, title?: string) => Promise<void>;
+} {
+  const { pushToast } = useToast();
+  const confirmAction = useConfirmDialog();
+
+  return {
+    notifyError: (error, title = "Request Failed") => {
+      pushToast({
+        title,
+        description: normalizeError(error),
+        tone: "danger",
+      });
+    },
+    notifySuccess: (description, title = "Saved") => {
+      pushToast({
+        title,
+        description,
+        tone: "success",
+      });
+    },
+    notifyInfo: (description, title = "Info") => {
+      pushToast({
+        title,
+        description,
+        tone: "info",
+      });
+    },
+    confirmAction,
+    copyJson: async (value, title = "Copied") => {
+      try {
+        await copyText(asPrettyJson(value));
+        pushToast({
+          title,
+          description: "JSON copied to clipboard.",
+          tone: "success",
+        });
+      } catch (error) {
+        pushToast({
+          title: "Copy Failed",
+          description: normalizeError(error),
+          tone: "danger",
+        });
+      }
+    },
+  };
+}
+
+async function persistWorkflowDefinitionBundle(bundle: WorkflowDefinitionBundle): Promise<void> {
+  await api.upsertWorkflowDefinition(bundle.definition);
+
+  await Promise.all(bundle.taskTemplates.map((taskTemplate) => api.upsertTaskTemplate(bundle.definition.workflowDefinitionId, taskTemplate)));
+  await Promise.all(bundle.edges.map((edge) => api.createTaskTemplateEdge(edge)));
+
+  if (bundle.loop) {
+    await api.upsertLoop(bundle.definition.workflowDefinitionId, bundle.loop);
+  }
+
+  await Promise.all(bundle.schedules.map((schedule) => api.upsertSchedule(schedule)));
+}
+
+function buildDefinitionBundleFromQueries(input: {
+  definition: WorkflowDefinition;
+  taskTemplates: readonly TaskTemplate[];
+  edges: readonly TaskTemplateEdge[];
+  loops: readonly LoopDefinition[];
+  schedules: readonly Schedule[];
+}): WorkflowDefinitionBundle {
+  return buildWorkflowDefinitionBundle({
+    definition: input.definition,
+    taskTemplates: input.taskTemplates,
+    edges: input.edges,
+    loop: input.loops[0] ?? null,
+    schedules: input.schedules,
+  });
+}
+
+function findingTone(finding: PreflightFinding): "warning" | "danger" {
+  return finding.severity === "error" ? "danger" : "warning";
+}
+
 function LoadingPanel(): JSX.Element {
   return (
     <div className="space-y-4">
@@ -228,6 +268,7 @@ function LoadingPanel(): JSX.Element {
 
 export function DashboardPage(): JSX.Element {
   const navigate = useNavigate();
+  const { notifyError, notifySuccess } = useConsoleFeedback();
   const definitionsQuery = useQuery({
     queryKey: ["workflow-definitions"],
     queryFn: () => api.listWorkflowDefinitions(),
@@ -258,6 +299,28 @@ export function DashboardPage(): JSX.Element {
     queryFn: () => api.listRuns({ status: "timeout" }),
     refetchInterval: 15_000,
   });
+  const [startDefinitionId, setStartDefinitionId] = useState("");
+  const queryClient = useQueryClient();
+  const startMutation = useMutation({
+    mutationFn: (workflowDefinitionId: string) =>
+      api.startWorkflowDefinition(workflowDefinitionId, createTimestamp()),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      notifySuccess("Workflow materialized. Opening runtime detail.", "Start Queued");
+      await navigate({
+        to: "/workflows/$workflowId",
+        params: { workflowId: result.workflowId },
+      });
+    },
+    onError: (error) => notifyError(error),
+  });
+  const enabledDefinitions = (definitionsQuery.data ?? []).filter((definition) => definition.enabled);
+
+  useEffect(() => {
+    if (!startDefinitionId && enabledDefinitions[0]) {
+      setStartDefinitionId(enabledDefinitions[0].workflowDefinitionId);
+    }
+  }, [enabledDefinitions, startDefinitionId]);
 
   if (
     definitionsQuery.isLoading ||
@@ -317,6 +380,10 @@ export function DashboardPage(): JSX.Element {
               <Plus className="h-4 w-4" />
               New Agent
             </Button>
+            <Button variant="secondary" onClick={() => void navigate({ to: "/schedules/new" })}>
+              <Plus className="h-4 w-4" />
+              New Schedule
+            </Button>
           </>
         }
       />
@@ -364,9 +431,45 @@ export function DashboardPage(): JSX.Element {
         <Card className="p-6">
           <SectionHeader
             title="Fast Actions"
-            description="Start from the authoring surface or jump into operations."
+            description="Create entities quickly or launch an enabled definition directly from the dashboard."
           />
-          <div className="mt-4 grid gap-3">
+          <div className="mt-4 space-y-4">
+            <div className="rounded-md border border-[color:var(--border)] bg-slate-50 p-4">
+              <div className="space-y-2">
+                <Label>Start Enabled Definition</Label>
+                <Select
+                  value={startDefinitionId}
+                  onChange={(event) => setStartDefinitionId(event.target.value)}
+                >
+                  <option value="">Select a definition</option>
+                  {enabledDefinitions.map((definition) => (
+                    <option
+                      key={definition.workflowDefinitionId}
+                      value={definition.workflowDefinitionId}
+                    >
+                      {definition.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  disabled={!startDefinitionId || startMutation.isPending}
+                  onClick={() => startMutation.mutate(startDefinitionId)}
+                >
+                  <Play className="h-4 w-4" />
+                  Start Definition
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => void navigate({ to: "/schedules/new" })}
+                >
+                  <Plus className="h-4 w-4" />
+                  Create Schedule
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-3">
             <LinkCard
               to="/workflow-definitions"
               title="Inspect authoring layer"
@@ -382,6 +485,7 @@ export function DashboardPage(): JSX.Element {
               title="Review automation"
               description="Manage once/cron schedules and triggered workflow history."
             />
+            </div>
           </div>
         </Card>
       </div>
@@ -481,7 +585,12 @@ function LinkCard({
 }
 
 export function WorkflowDefinitionsPage(): JSX.Element {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { notifyError, notifySuccess, confirmAction } = useConsoleFeedback();
   const [search, setSearch] = useState("");
+  const [enabledFilter, setEnabledFilter] = useState<"" | "enabled" | "disabled">("");
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const definitionsQuery = useQuery({
     queryKey: ["workflow-definitions"],
     queryFn: () => api.listWorkflowDefinitions(),
@@ -506,12 +615,78 @@ export function WorkflowDefinitionsPage(): JSX.Element {
 
     return counts;
   }, [workflowsQuery.data]);
+  const startMutation = useMutation({
+    mutationFn: (workflowDefinitionId: string) =>
+      api.startWorkflowDefinition(workflowDefinitionId, createTimestamp()),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      notifySuccess("Workflow materialized. Opening runtime detail.", "Start Queued");
+      await navigate({
+        to: "/workflows/$workflowId",
+        params: { workflowId: result.workflowId },
+      });
+    },
+    onError: (error) => notifyError(error),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (workflowDefinitionId: string) => api.deleteWorkflowDefinition(workflowDefinitionId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Workflow definition deleted.", "Deleted");
+    },
+    onError: (error) => notifyError(error),
+  });
+  const duplicateMutation = useMutation({
+    mutationFn: async (definition: WorkflowDefinition) => {
+      const [taskTemplates, edges, loops, schedules] = await Promise.all([
+        api.listTaskTemplates(definition.workflowDefinitionId),
+        api.listTaskTemplateEdges(definition.workflowDefinitionId),
+        api.listLoops(definition.workflowDefinitionId),
+        api.listSchedules({
+          targetType: "workflow",
+          targetId: definition.workflowDefinitionId,
+        }),
+      ]);
+      const clonedBundle = cloneWorkflowDefinitionBundle(
+        buildDefinitionBundleFromQueries({
+          definition,
+          taskTemplates,
+          edges,
+          loops,
+          schedules,
+        }),
+      );
+
+      await persistWorkflowDefinitionBundle(clonedBundle);
+
+      return clonedBundle.definition;
+    },
+    onSuccess: async (definition) => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition duplicated with cloned tasks, edges, loop, and schedules.", "Duplicated");
+      await navigate({
+        to: "/workflow-definitions/$workflowDefinitionId/overview",
+        params: {
+          workflowDefinitionId: definition.workflowDefinitionId,
+        },
+      });
+    },
+    onError: (error) => notifyError(error),
+  });
   const rows = useMemo(() => {
     return sortByUpdatedAtDescending(definitionsQuery.data ?? []).filter((definition) => {
       const haystack = `${definition.name} ${definition.description ?? ""}`.toLowerCase();
-      return haystack.includes(search.toLowerCase());
+      const searchMatched = haystack.includes(search.toLowerCase());
+      const enabledMatched =
+        enabledFilter === ""
+          ? true
+          : enabledFilter === "enabled"
+            ? definition.enabled
+            : !definition.enabled;
+
+      return searchMatched && enabledMatched;
     });
-  }, [definitionsQuery.data, search]);
+  }, [definitionsQuery.data, enabledFilter, search]);
   const columns = useMemo<ColumnDef<WorkflowDefinition>[]>(
     () => [
       {
@@ -556,8 +731,81 @@ export function WorkflowDefinitionsPage(): JSX.Element {
         header: "Updated",
         cell: ({ row }) => formatDateTime(row.original.updatedAt),
       },
+      {
+        header: "Actions",
+        cell: ({ row }) => (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => duplicateMutation.mutate(row.original)}
+              disabled={duplicateMutation.isPending}
+            >
+              <Copy className="h-4 w-4" />
+              Duplicate
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => startMutation.mutate(row.original.workflowDefinitionId)}
+              disabled={!row.original.enabled || startMutation.isPending}
+            >
+              <Play className="h-4 w-4" />
+              Start
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={async () => {
+                try {
+                  const [taskTemplates, edges, loops, schedules] = await Promise.all([
+                    api.listTaskTemplates(row.original.workflowDefinitionId),
+                    api.listTaskTemplateEdges(row.original.workflowDefinitionId),
+                    api.listLoops(row.original.workflowDefinitionId),
+                    api.listSchedules({
+                      targetType: "workflow",
+                      targetId: row.original.workflowDefinitionId,
+                    }),
+                  ]);
+                  const relatedWorkflows = (workflowsQuery.data ?? []).filter(
+                    (workflow) =>
+                      workflow.workflowDefinitionId === row.original.workflowDefinitionId,
+                  );
+                  const approved = await confirmAction({
+                    title: `Delete ${row.original.name}?`,
+                    description: [
+                      `${taskTemplates.length} task templates`,
+                      `${edges.length} graph edges`,
+                      `${loops.length} loop definitions`,
+                      `${schedules.length} attached schedules`,
+                      `${relatedWorkflows.length} runtime workflows`,
+                    ].join(", "),
+                    confirmLabel: "Delete Definition",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
+                    deleteMutation.mutate(row.original.workflowDefinitionId);
+                  }
+                } catch (error) {
+                  notifyError(error);
+                }
+              }}
+              disabled={deleteMutation.isPending}
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+          </div>
+        ),
+      },
     ],
-    [runtimeByDefinition],
+    [
+      confirmAction,
+      deleteMutation,
+      duplicateMutation,
+      notifyError,
+      runtimeByDefinition,
+      startMutation,
+      workflowsQuery.data,
+    ],
   );
 
   if (definitionsQuery.isLoading || workflowsQuery.isLoading) {
@@ -572,22 +820,65 @@ export function WorkflowDefinitionsPage(): JSX.Element {
     );
   }
 
+  async function handleImportChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imported = parseWorkflowDefinitionImport(JSON.parse(await file.text()));
+      const clonedBundle = cloneWorkflowDefinitionBundle(imported, {
+        nameSuffix: "Imported",
+      });
+
+      await persistWorkflowDefinitionBundle(clonedBundle);
+      await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition imported as a new cloned bundle.", "Imported");
+      await navigate({
+        to: "/workflow-definitions/$workflowDefinitionId/overview",
+        params: {
+          workflowDefinitionId: clonedBundle.definition.workflowDefinitionId,
+        },
+      });
+    } catch (error) {
+      notifyError(error, "Import Failed");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <SectionHeader
         title="Workflow Definitions"
         description="Static authoring layer for task templates, graph edges, loops, and attached schedules."
         actions={
-          <Link to="/workflow-definitions/new">
-            <Button>
-              <Plus className="h-4 w-4" />
-              New Definition
+          <>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(event) => {
+                void handleImportChange(event);
+              }}
+            />
+            <Button variant="secondary" onClick={() => importInputRef.current?.click()}>
+              <Download className="h-4 w-4" />
+              Import JSON
             </Button>
-          </Link>
+            <Link to="/workflow-definitions/new">
+              <Button>
+                <Plus className="h-4 w-4" />
+                New Definition
+              </Button>
+            </Link>
+          </>
         }
       />
       <Card className="p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
           <div className="w-full max-w-md">
             <Label>Search Definitions</Label>
             <Input
@@ -596,16 +887,31 @@ export function WorkflowDefinitionsPage(): JSX.Element {
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              void definitionsQuery.refetch();
-              void workflowsQuery.refetch();
-            }}
-          >
-            <RefreshCcw className="h-4 w-4" />
-            Refresh
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <div className="w-44 space-y-2">
+              <Label>Enabled Filter</Label>
+              <Select
+                value={enabledFilter}
+                onChange={(event) =>
+                  setEnabledFilter(event.target.value as typeof enabledFilter)
+                }
+              >
+                <option value="">All</option>
+                <option value="enabled">Enabled</option>
+                <option value="disabled">Disabled</option>
+              </Select>
+            </div>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                void definitionsQuery.refetch();
+                void workflowsQuery.refetch();
+              }}
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Refresh
+            </Button>
+          </div>
         </div>
       </Card>
       {rows.length === 0 ? (
@@ -623,6 +929,7 @@ export function WorkflowDefinitionsPage(): JSX.Element {
 export function NewWorkflowDefinitionPage(): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { notifyError, notifySuccess } = useConsoleFeedback();
   const [draft, setDraft] = useState<WorkflowDefinition>(() => {
     const timestamp = createTimestamp();
 
@@ -640,12 +947,13 @@ export function NewWorkflowDefinitionPage(): JSX.Element {
     mutationFn: (payload: WorkflowDefinition) => api.upsertWorkflowDefinition(payload),
     onSuccess: async (payload) => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition created. Continue in the overview tab.", "Created");
       await navigate({
         to: "/workflow-definitions/$workflowDefinitionId/overview",
         params: { workflowDefinitionId: payload.workflowDefinitionId },
       });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const dirty = draft.name.length > 0;
   useUnsavedChangesGuard(dirty);
@@ -680,6 +988,7 @@ export function DefinitionDetailShell({
 }: {
   workflowDefinitionId: string;
 }): JSX.Element {
+  const { copyJson } = useConsoleFeedback();
   const definitionQuery = useQuery({
     queryKey: ["workflow-definition", workflowDefinitionId],
     queryFn: () => api.getWorkflowDefinition(workflowDefinitionId),
@@ -712,7 +1021,12 @@ export function DefinitionDetailShell({
             <Badge tone={definitionQuery.data.enabled ? "success" : "warning"}>
               {definitionQuery.data.enabled ? "enabled" : "disabled"}
             </Badge>
-            <Button variant="ghost" onClick={() => copyJson(definitionQuery.data)}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                void copyJson(definitionQuery.data, "Definition Copied");
+              }}
+            >
               <Copy className="h-4 w-4" />
               Copy JSON
             </Button>
@@ -824,6 +1138,8 @@ export function DefinitionOverviewPage({
 }): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { confirmAction, copyJson, notifyError, notifySuccess } = useConsoleFeedback();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const definitionQuery = useQuery({
     queryKey: ["workflow-definition", workflowDefinitionId],
     queryFn: () => api.getWorkflowDefinition(workflowDefinitionId),
@@ -859,24 +1175,55 @@ export function DefinitionOverviewPage({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-definition", workflowDefinitionId] });
       await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition metadata saved.");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteWorkflowDefinition(workflowDefinitionId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition deleted.", "Deleted");
       await navigate({ to: "/workflow-definitions" });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const startMutation = useMutation({
     mutationFn: () => api.startWorkflowDefinition(workflowDefinitionId, createTimestamp()),
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      notifySuccess("Workflow materialized. Opening runtime detail.", "Start Queued");
       await navigate({ to: "/workflows/$workflowId", params: { workflowId: result.workflowId } });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
+  });
+  const duplicateMutation = useMutation({
+    mutationFn: async () => {
+      const clonedBundle = cloneWorkflowDefinitionBundle(
+        buildDefinitionBundleFromQueries({
+          definition: draft!,
+          taskTemplates: taskTemplatesQuery.data ?? [],
+          edges: taskTemplateEdgesQuery.data ?? [],
+          loops: loopsQuery.data ?? [],
+          schedules: schedulesQuery.data ?? [],
+        }),
+      );
+
+      await persistWorkflowDefinitionBundle(clonedBundle);
+
+      return clonedBundle.definition;
+    },
+    onSuccess: async (definition) => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Definition duplicated with tasks, graph, loop, and schedules.", "Duplicated");
+      await navigate({
+        to: "/workflow-definitions/$workflowDefinitionId/overview",
+        params: {
+          workflowDefinitionId: definition.workflowDefinitionId,
+        },
+      });
+    },
+    onError: (error) => notifyError(error),
   });
 
   const dirty = isDirtyDraft(draft, definitionQuery.data);
@@ -924,23 +1271,95 @@ export function DefinitionOverviewPage({
     taskTemplates: taskTemplatesQuery.data ?? [],
     edges: taskTemplateEdgesQuery.data ?? [],
     agents: agentsQuery.data ?? [],
+    loop: loopsQuery.data?.[0] ?? null,
   });
+  const preflightErrors = preflightFindings.filter((finding) => finding.severity === "error");
   const relatedWorkflows = (workflowsQuery.data ?? []).filter(
     (workflow) => workflow.workflowDefinitionId === workflowDefinitionId,
   );
 
+  async function handleImportChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imported = parseWorkflowDefinitionImport(JSON.parse(await file.text()));
+      const clonedBundle = cloneWorkflowDefinitionBundle(imported, {
+        nameSuffix: "Imported",
+      });
+
+      await persistWorkflowDefinitionBundle(clonedBundle);
+      await queryClient.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      notifySuccess("Imported definition bundle as a new definition.", "Imported");
+      await navigate({
+        to: "/workflow-definitions/$workflowDefinitionId/overview",
+        params: {
+          workflowDefinitionId: clonedBundle.definition.workflowDefinitionId,
+        },
+      });
+    } catch (error) {
+      notifyError(error, "Import Failed");
+    }
+  }
+
   return (
     <div className="space-y-6">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json"
+        className="hidden"
+        onChange={(event) => {
+          void handleImportChange(event);
+        }}
+      />
       <SectionHeader
         title="Overview"
         description="Top-level metadata, start preflight, and destructive controls for this definition."
         actions={
           <>
-            <Button variant="secondary" onClick={() => exportJson(`${workflowDefinitionId}.json`, draft)}>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                exportJson(
+                  `${workflowDefinitionId}.bundle.json`,
+                  buildDefinitionBundleFromQueries({
+                    definition: draft,
+                    taskTemplates: taskTemplatesQuery.data ?? [],
+                    edges: taskTemplateEdgesQuery.data ?? [],
+                    loops: loopsQuery.data ?? [],
+                    schedules: schedulesQuery.data ?? [],
+                  }),
+                )
+              }
+            >
               <Download className="h-4 w-4" />
               Export
             </Button>
-            <Button variant="secondary" onClick={() => copyJson(draft)}>
+            <Button variant="secondary" onClick={() => importInputRef.current?.click()}>
+              <Download className="h-4 w-4" />
+              Import JSON
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                void duplicateMutation.mutateAsync();
+              }}
+              disabled={duplicateMutation.isPending}
+            >
+              <Copy className="h-4 w-4" />
+              Duplicate
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                void copyJson(draft, "Definition Copied");
+              }}
+            >
               <Copy className="h-4 w-4" />
               Copy JSON
             </Button>
@@ -953,9 +1372,13 @@ export function DefinitionOverviewPage({
                 if (definitionQuery.data?.updatedAt) {
                   const latest = await api.getWorkflowDefinition(workflowDefinitionId);
                   if (latest.updatedAt !== definitionQuery.data.updatedAt) {
-                    const proceed = window.confirm(
-                      "The definition changed on the server. Overwrite with your local draft?",
-                    );
+                    const proceed = await confirmAction({
+                      title: "Overwrite newer server state?",
+                      description:
+                        "The definition changed on the server. Confirm if you want to overwrite it with your local draft.",
+                      confirmLabel: "Overwrite",
+                      confirmTone: "warning",
+                    });
 
                     if (!proceed) {
                       return;
@@ -975,7 +1398,7 @@ export function DefinitionOverviewPage({
             </Button>
             <Button
               variant="danger"
-              disabled={startMutation.isPending || preflightFindings.length > 0}
+              disabled={startMutation.isPending || preflightErrors.length > 0}
               onClick={() => startMutation.mutate()}
             >
               <Play className="h-4 w-4" />
@@ -991,7 +1414,7 @@ export function DefinitionOverviewPage({
         <Card className="space-y-4 p-6">
           <SectionHeader
             title="Start Preflight"
-            description="Minimum operator guardrails before materializing a runtime workflow."
+            description="Operator preflight including graph validation, loop checks, assignee state, and capability coverage."
           />
           {preflightFindings.length === 0 ? (
             <div className="rounded-md border border-[color:var(--success)]/25 bg-[color:var(--success)]/8 p-4 text-sm text-[color:var(--success)]">
@@ -1001,11 +1424,24 @@ export function DefinitionOverviewPage({
             <div className="space-y-2">
               {preflightFindings.map((finding) => (
                 <div
-                  key={finding}
-                  className="flex items-start gap-3 rounded-md border border-[color:var(--warning)]/25 bg-[color:var(--warning)]/10 p-4 text-sm text-[color:var(--foreground)]"
+                  key={`${finding.code}:${finding.message}`}
+                  className={`flex items-start gap-3 rounded-md border p-4 text-sm text-[color:var(--foreground)] ${
+                    finding.severity === "error"
+                      ? "border-[color:var(--danger)]/25 bg-[color:var(--danger)]/8"
+                      : "border-[color:var(--warning)]/25 bg-[color:var(--warning)]/10"
+                  }`}
                 >
-                  <AlertTriangle className="mt-0.5 h-4 w-4 text-[color:var(--warning)]" />
-                  <span>{finding}</span>
+                  <AlertTriangle
+                    className={`mt-0.5 h-4 w-4 ${
+                      finding.severity === "error"
+                        ? "text-[color:var(--danger)]"
+                        : "text-[color:var(--warning)]"
+                    }`}
+                  />
+                  <div className="space-y-1">
+                    <Badge tone={findingTone(finding)}>{finding.code}</Badge>
+                    <div>{finding.message}</div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1019,7 +1455,7 @@ export function DefinitionOverviewPage({
             actions={
               <Button
                 variant="danger"
-                onClick={() => {
+                onClick={async () => {
                   const summary = [
                     `${taskTemplatesQuery.data?.length ?? 0} task templates`,
                     `${taskTemplateEdgesQuery.data?.length ?? 0} graph edges`,
@@ -1027,10 +1463,17 @@ export function DefinitionOverviewPage({
                     `${schedulesQuery.data?.length ?? 0} attached schedules`,
                     `${relatedWorkflows.length} runtime workflows`,
                   ].join(", ");
-
-                  const approved = window.confirm(
-                    `Delete ${draft.name}?\n\nImpact summary: ${summary}`,
-                  );
+                  const approved = await confirmAction({
+                    title: `Delete ${draft.name}?`,
+                    description: [
+                      `Impact summary: ${summary}`,
+                      schedulesQuery.data?.length
+                        ? "Definition schedules still exist. Remove or review them before deleting to avoid cleanup surprises."
+                        : "No attached schedules were found.",
+                    ].join("\n\n"),
+                    confirmLabel: "Delete Definition",
+                    confirmTone: "danger",
+                  });
 
                   if (approved) {
                     deleteMutation.mutate();
@@ -1060,6 +1503,7 @@ export function DefinitionTasksPage({
   workflowDefinitionId: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const taskTemplatesQuery = useQuery({
     queryKey: ["task-templates", workflowDefinitionId],
     queryFn: () => api.listTaskTemplates(workflowDefinitionId),
@@ -1085,12 +1529,17 @@ export function DefinitionTasksPage({
     [draft, selectedTaskTemplate],
   );
 
-  function confirmTaskTemplateDiscard(): boolean {
+  async function confirmTaskTemplateDiscard(): Promise<boolean> {
     if (!taskDraftDirty) {
       return true;
     }
 
-    return window.confirm("You have unsaved task template changes. Discard them and continue?");
+    return confirmAction({
+      title: "Discard unsaved task template changes?",
+      description: "Your current task template draft has unsaved changes.",
+      confirmLabel: "Discard Changes",
+      confirmTone: "warning",
+    });
   }
 
   useEffect(() => {
@@ -1107,8 +1556,9 @@ export function DefinitionTasksPage({
     mutationFn: (payload: TaskTemplate) => api.upsertTaskTemplate(workflowDefinitionId, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["task-templates", workflowDefinitionId] });
+      notifySuccess("Task template saved.");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: (taskTemplateId: string) => api.deleteTaskTemplate(taskTemplateId),
@@ -1116,8 +1566,9 @@ export function DefinitionTasksPage({
       await queryClient.invalidateQueries({ queryKey: ["task-templates", workflowDefinitionId] });
       setSelectedTaskTemplateId(null);
       setDraft(undefined);
+      notifySuccess("Task template deleted.", "Deleted");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (taskTemplatesQuery.isLoading || agentsQuery.isLoading) {
@@ -1140,8 +1591,8 @@ export function DefinitionTasksPage({
           description="Prompt/payload authoring lives here."
           actions={
             <Button
-              onClick={() => {
-                if (!confirmTaskTemplateDiscard()) {
+              onClick={async () => {
+                if (!(await confirmTaskTemplateDiscard())) {
                   return;
                 }
 
@@ -1181,12 +1632,12 @@ export function DefinitionTasksPage({
             <button
               key={taskTemplate.taskTemplateId}
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 if (taskTemplate.taskTemplateId === selectedTaskTemplateId) {
                   return;
                 }
 
-                if (!confirmTaskTemplateDiscard()) {
+                if (!(await confirmTaskTemplateDiscard())) {
                   return;
                 }
 
@@ -1232,10 +1683,16 @@ export function DefinitionTasksPage({
                 </Button>
                 <Button
                   variant="danger"
-                  onClick={() => {
-                    if (
-                      window.confirm(`Delete task template ${draft.title}?`)
-                    ) {
+                  onClick={async () => {
+                    const approved = await confirmAction({
+                      title: `Delete ${draft.title}?`,
+                      description:
+                        "This removes the task template definition. Review graph edges and loop references before deleting.",
+                      confirmLabel: "Delete Task Template",
+                      confirmTone: "danger",
+                    });
+
+                    if (approved) {
                       deleteMutation.mutate(draft.taskTemplateId);
                     }
                   }}
@@ -1270,6 +1727,13 @@ export function DefinitionTasksPage({
                   </option>
                 ))}
               </Select>
+              {draft.defaultAssigneeAgentId &&
+              agentsQuery.data?.find((agent) => agent.agentId === draft.defaultAssigneeAgentId)
+                ?.enabled === false ? (
+                <div className="text-xs text-[color:var(--warning)]">
+                  Selected assignee is currently disabled and will fail preflight.
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -1314,6 +1778,22 @@ export function DefinitionTasksPage({
             />
           </div>
 
+          <KeyValueEditor
+            label="Required Capabilities"
+            value={capabilityArrayToRecord(getRequiredCapabilities(draft))}
+            onChange={(record) =>
+              setDraft({
+                ...draft,
+                metadata: {
+                  ...(draft.metadata ?? {}),
+                  requiredCapabilities: Object.keys(record).filter(Boolean),
+                },
+              })
+            }
+            keyPlaceholder="capability"
+            valuePlaceholder="required"
+          />
+
           <PromptEditor
             value={draft.payload}
             onChange={(payload) =>
@@ -1356,6 +1836,7 @@ export function DefinitionGraphPage({
   workflowDefinitionId: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  const { notifyError, notifyInfo, notifySuccess } = useConsoleFeedback();
   const templatesQuery = useQuery({
     queryKey: ["task-templates", workflowDefinitionId],
     queryFn: () => api.listTaskTemplates(workflowDefinitionId),
@@ -1376,16 +1857,18 @@ export function DefinitionGraphPage({
     mutationFn: (payload: TaskTemplateEdge) => api.createTaskTemplateEdge(payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["task-template-edges", workflowDefinitionId] });
+      notifySuccess("Graph edge created.");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: ({ fromTaskTemplateId, toTaskTemplateId }: TaskTemplateEdge) =>
       api.deleteTaskTemplateEdge(fromTaskTemplateId, toTaskTemplateId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["task-template-edges", workflowDefinitionId] });
+      notifySuccess("Graph edge deleted.", "Deleted");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (templatesQuery.isLoading || edgesQuery.isLoading || loopsQuery.isLoading) {
@@ -1493,7 +1976,7 @@ export function DefinitionGraphPage({
           <Button
             onClick={() => {
               if (!newEdge.fromTaskTemplateId || !newEdge.toTaskTemplateId) {
-                window.alert("fromTaskTemplateId and toTaskTemplateId are required.");
+                notifyInfo("fromTaskTemplateId and toTaskTemplateId are required.", "Edge Incomplete");
                 return;
               }
 
@@ -1559,6 +2042,7 @@ export function DefinitionLoopPage({
   workflowDefinitionId: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const templatesQuery = useQuery({
     queryKey: ["task-templates", workflowDefinitionId],
     queryFn: () => api.listTaskTemplates(workflowDefinitionId),
@@ -1597,16 +2081,18 @@ export function DefinitionLoopPage({
     mutationFn: (payload: LoopDefinition) => api.upsertLoop(workflowDefinitionId, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["loops", workflowDefinitionId] });
+      notifySuccess("Loop saved.");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: (loopDefinitionId: string) => api.deleteLoop(loopDefinitionId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["loops", workflowDefinitionId] });
       setDraft(undefined);
+      notifySuccess("Loop deleted.", "Deleted");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (templatesQuery.isLoading || loopsQuery.isLoading) {
@@ -1655,8 +2141,16 @@ export function DefinitionLoopPage({
             {existingLoop ? (
               <Button
                 variant="danger"
-                onClick={() => {
-                  if (window.confirm(`Delete loop ${existingLoop.name}?`)) {
+                onClick={async () => {
+                  const approved = await confirmAction({
+                    title: `Delete loop ${existingLoop.name}?`,
+                    description:
+                      "This removes the loop configuration and its graph grouping semantics.",
+                    confirmLabel: "Delete Loop",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
                     deleteMutation.mutate(existingLoop.loopDefinitionId);
                   }
                 }}
@@ -1821,6 +2315,7 @@ export function DefinitionSchedulesPage({
   workflowDefinitionId: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  const { confirmAction, copyJson, notifyError, notifySuccess } = useConsoleFeedback();
   const schedulesQuery = useQuery({
     queryKey: ["schedules", "definition", workflowDefinitionId],
     queryFn: () => api.listSchedules({ targetType: "workflow", targetId: workflowDefinitionId }),
@@ -1856,15 +2351,17 @@ export function DefinitionSchedulesPage({
           updatedAt: timestamp,
         };
       });
+      notifySuccess("Definition schedule saved.");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: (scheduleId: string) => api.deleteSchedule(scheduleId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["schedules", "definition", workflowDefinitionId] });
+      notifySuccess("Definition schedule deleted.", "Deleted");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (schedulesQuery.isLoading) {
@@ -1920,7 +2417,12 @@ export function DefinitionSchedulesPage({
                   <Badge tone={schedule.enabled ? "success" : "warning"}>
                     {schedule.enabled ? "enabled" : "disabled"}
                   </Badge>
-                  <Button variant="ghost" onClick={() => copyJson(schedule)}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      void copyJson(schedule, "Schedule Copied");
+                    }}
+                  >
                     <Copy className="h-4 w-4" />
                     Copy
                   </Button>
@@ -1930,8 +2432,16 @@ export function DefinitionSchedulesPage({
                   </Button>
                   <Button
                     variant="danger"
-                    onClick={() => {
-                      if (window.confirm(`Delete schedule ${schedule.scheduleId}?`)) {
+                    onClick={async () => {
+                      const approved = await confirmAction({
+                        title: `Delete schedule ${schedule.scheduleId}?`,
+                        description:
+                          "This removes the definition schedule and future automatic starts.",
+                        confirmLabel: "Delete Schedule",
+                        confirmTone: "danger",
+                      });
+
+                      if (approved) {
                         deleteMutation.mutate(schedule.scheduleId);
                       }
                     }}
@@ -2219,6 +2729,7 @@ export function AgentEditorPage({
 }): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const agentQuery = useQuery({
     queryKey: ["agent", agentId],
     queryFn: () => api.getAgent(agentId!),
@@ -2249,17 +2760,19 @@ export function AgentEditorPage({
     mutationFn: (payload: AgentDefinition) => api.upsertAgent(payload),
     onSuccess: async (payload) => {
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      notifySuccess(agentId ? "Agent updated." : "Agent created.", agentId ? "Saved" : "Created");
       await navigate({ to: "/agents/$agentId", params: { agentId: payload.agentId } });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteAgent(agentId!),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      notifySuccess("Agent deleted.", "Deleted");
       await navigate({ to: "/agents" });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (agentQuery.isLoading) {
@@ -2291,8 +2804,16 @@ export function AgentEditorPage({
             {agentId ? (
               <Button
                 variant="danger"
-                onClick={() => {
-                  if (window.confirm(`Delete agent ${draft.name}?`)) {
+                onClick={async () => {
+                  const approved = await confirmAction({
+                    title: `Delete agent ${draft.name}?`,
+                    description:
+                      "This removes the runtime target from explicit assignee and capability selection.",
+                    confirmLabel: "Delete Agent",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
                     deleteMutation.mutate();
                   }
                 }}
@@ -2612,6 +3133,7 @@ export function ScheduleEditorPage({
 }): JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const scheduleQuery = useQuery({
     queryKey: ["schedule", scheduleId],
     queryFn: () => api.getSchedule(scheduleId!),
@@ -2650,17 +3172,19 @@ export function ScheduleEditorPage({
     mutationFn: (payload: Schedule) => api.upsertSchedule(payload),
     onSuccess: async (payload) => {
       await queryClient.invalidateQueries({ queryKey: ["schedules"] });
+      notifySuccess(scheduleId ? "Schedule updated." : "Schedule created.", scheduleId ? "Saved" : "Created");
       await navigate({ to: "/schedules/$scheduleId", params: { scheduleId: payload.scheduleId } });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteSchedule(scheduleId!),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["schedules"] });
+      notifySuccess("Schedule deleted.", "Deleted");
       await navigate({ to: "/schedules" });
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
   });
 
   if (scheduleQuery.isLoading || definitionsQuery.isLoading || workflowsQuery.isLoading) {
@@ -2696,8 +3220,15 @@ export function ScheduleEditorPage({
               {scheduleId ? (
                 <Button
                   variant="danger"
-                  onClick={() => {
-                    if (window.confirm(`Delete schedule ${draft.scheduleId}?`)) {
+                  onClick={async () => {
+                    const approved = await confirmAction({
+                      title: `Delete schedule ${draft.scheduleId}?`,
+                      description: "This removes the schedule and its future trigger policy.",
+                      confirmLabel: "Delete Schedule",
+                      confirmTone: "danger",
+                    });
+
+                    if (approved) {
                       deleteMutation.mutate();
                     }
                   }}
@@ -2843,6 +3374,9 @@ export function WorkflowDetailPage({
 }: {
   workflowId: string;
 }): JSX.Element {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const workflowQuery = useQuery({
     queryKey: ["workflow", workflowId],
     queryFn: () => api.getWorkflow(workflowId),
@@ -2872,6 +3406,32 @@ export function WorkflowDetailPage({
       refetchInterval: 10_000,
     })),
   });
+  const cancelWorkflowMutation = useMutation({
+    mutationFn: () => api.cancelWorkflow(workflowId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow", workflowId] });
+      await queryClient.invalidateQueries({ queryKey: ["workflow", workflowId, "tasks"] });
+      notifySuccess("Workflow cancelled. Non-running tasks were moved to cancelled.", "Cancelled");
+    },
+    onError: (error) => notifyError(error),
+  });
+  const purgeWorkflowMutation = useMutation({
+    mutationFn: () => api.purgeWorkflow(workflowId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      notifySuccess("Workflow runtime rows purged.", "Purged");
+      await navigate({ to: "/workflows" });
+    },
+    onError: (error) => notifyError(error),
+  });
+  const dispatchTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.dispatchTask(taskId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow", workflowId, "tasks"] });
+      notifySuccess("Ready task dispatched.", "Dispatched");
+    },
+    onError: (error) => notifyError(error),
+  });
 
   if (workflowQuery.isLoading || tasksQuery.isLoading || edgesQuery.isLoading || loopsQuery.isLoading) {
     return <LoadingPanel />;
@@ -2887,26 +3447,87 @@ export function WorkflowDetailPage({
 
   const tasks = tasksQuery.data ?? [];
   const loop = loopsQuery.data?.[0] ?? null;
-  const latestRuns = new Map<string, Run | undefined>();
+  const runsByTaskId = new Map<string, Run[]>();
   runQueries.forEach((query, index) => {
     const task = tasks[index];
     if (!task) {
       return;
     }
 
-    latestRuns.set(task.taskId, sortByUpdatedAtDescending(query.data ?? [])[0]);
+    runsByTaskId.set(task.taskId, query.data ?? []);
+  });
+  const runSummaries = buildTaskRunSummaries(runsByTaskId);
+  const latestRuns = new Map<string, Run | undefined>();
+  const latestSucceededRuns = new Map<string, Run | undefined>();
+  runSummaries.forEach((summary, taskId) => {
+    latestRuns.set(taskId, summary.latest);
+    latestSucceededRuns.set(taskId, summary.latestSucceeded);
   });
 
   const failedTasks = tasks.filter((task) => task.status === "failed");
   const downstreamBlocked = tasks.filter(
     (task) => task.status === "blocked" || task.status === "waiting",
   );
+  const terminalWorkflow = ["succeeded", "failed", "cancelled"].includes(workflowQuery.data.status);
 
   return (
     <div className="space-y-6">
       <SectionHeader
         title={workflowQuery.data.name}
         description="Single-runtime monitoring view with graph, task stream, run history, and failure analysis."
+        actions={
+          <>
+            {workflowQuery.data.workflowDefinitionId ? (
+              <Link
+                to="/workflow-definitions/$workflowDefinitionId/overview"
+                params={{ workflowDefinitionId: workflowQuery.data.workflowDefinitionId }}
+              >
+                <Button variant="secondary">Open Definition</Button>
+              </Link>
+            ) : null}
+            {!terminalWorkflow ? (
+              <Button
+                variant="danger"
+                disabled={cancelWorkflowMutation.isPending}
+                onClick={async () => {
+                  const approved = await confirmAction({
+                    title: `Cancel workflow ${workflowQuery.data.name}?`,
+                    description:
+                      "Pending, ready, blocked, waiting, and queued tasks will be cancelled. Running tasks are left as-is.",
+                    confirmLabel: "Cancel Workflow",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
+                    cancelWorkflowMutation.mutate();
+                  }
+                }}
+              >
+                Cancel Workflow
+              </Button>
+            ) : (
+              <Button
+                variant="danger"
+                disabled={purgeWorkflowMutation.isPending}
+                onClick={async () => {
+                  const approved = await confirmAction({
+                    title: `Purge workflow ${workflowQuery.data.name}?`,
+                    description:
+                      "This permanently removes runtime workflow, task, task-edge, and run rows for this instance.",
+                    confirmLabel: "Purge Workflow",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
+                    purgeWorkflowMutation.mutate();
+                  }
+                }}
+              >
+                Purge Workflow
+              </Button>
+            )}
+          </>
+        }
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -2934,7 +3555,12 @@ export function WorkflowDetailPage({
           title="Runtime Graph"
           description="Task status, generation source, iteration markers, and injection edges."
         />
-        <RuntimeGraph tasks={tasks} edges={edgesQuery.data ?? []} loop={loop} />
+        <RuntimeGraph
+          tasks={tasks}
+          edges={edgesQuery.data ?? []}
+          loop={loop}
+          latestRunsByTaskId={latestRuns}
+        />
       </Card>
 
       <Card className="space-y-4 p-6">
@@ -2954,10 +3580,24 @@ export function WorkflowDetailPage({
                     {task.taskId} · {task.assigneeAgentId ?? "no assignee"} · {task.generationSource ?? "definition"}
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={statusTone(task.status)}>{task.status}</Badge>
+                  {task.generationSource === "dynamic" ? <Badge tone="info">spawned</Badge> : null}
                   {task.iteration !== undefined && task.iteration !== null ? (
                     <Badge tone="warning">iteration {task.iteration}</Badge>
+                  ) : null}
+                  {task.status === "ready" ? (
+                    <Button
+                      variant="ghost"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        dispatchTaskMutation.mutate(task.taskId);
+                      }}
+                      disabled={dispatchTaskMutation.isPending}
+                    >
+                      <Play className="h-4 w-4" />
+                      Dispatch
+                    </Button>
                   ) : null}
                 </div>
               </div>
@@ -2973,7 +3613,8 @@ export function WorkflowDetailPage({
         />
         <div className="space-y-3">
           {tasks.map((task) => {
-            const latestRun = latestRuns.get(task.taskId);
+            const summary = runSummaries.get(task.taskId);
+            const latestRun = summary?.latest;
 
             return (
               <div
@@ -2990,6 +3631,11 @@ export function WorkflowDetailPage({
                   <Badge tone={statusTone(latestRun?.status ?? "queued")}>
                     {latestRun?.status ?? "no runs"}
                   </Badge>
+                  {summary ? (
+                    <Badge tone="muted">
+                      {summary.succeeded} ok / {summary.failed} fail / {summary.timeout} timeout
+                    </Badge>
+                  ) : null}
                   {latestRun ? (
                     <Link to="/runs/$runId" params={{ runId: latestRun.runId }}>
                       <Button variant="ghost">Open Run</Button>
@@ -3016,6 +3662,16 @@ export function WorkflowDetailPage({
           <div className="space-y-4">
             {failedTasks.map((task) => {
               const latestRun = latestRuns.get(task.taskId);
+              const injectionPreview = reconstructInjectedPayload(
+                task,
+                edgesQuery.data ?? [],
+                latestSucceededRuns,
+              );
+              const blockedDependents = collectDownstreamBlockedTasks(
+                task.taskId,
+                tasks,
+                edgesQuery.data ?? [],
+              );
 
               return (
                 <Card key={task.taskId} className="space-y-3 border-[color:var(--danger)]/20 p-4">
@@ -3023,10 +3679,13 @@ export function WorkflowDetailPage({
                     <div>
                       <div className="font-semibold">{task.title}</div>
                       <div className="mt-1 text-xs text-[color:var(--muted)]">
-                        assignee {task.assigneeAgentId ?? "—"} · persisted payload shown below
+                        assignee {task.assigneeAgentId ?? "—"} · latest run {latestRun?.runId ?? "—"}
                       </div>
                     </div>
                     <Badge tone="danger">failed</Badge>
+                  </div>
+                  <div className="rounded-md border border-[color:var(--danger)]/15 bg-red-50 p-3 text-sm">
+                    {latestRun?.error ?? "No run error payload captured."}
                   </div>
                   <div className="grid gap-4 xl:grid-cols-2">
                     <pre className="overflow-auto rounded-md bg-stone-950 p-4 text-xs text-stone-100">
@@ -3035,6 +3694,68 @@ export function WorkflowDetailPage({
                     <pre className="overflow-auto rounded-md bg-stone-950 p-4 text-xs text-stone-100">
                       {asPrettyJson(latestRun?.output ?? { error: latestRun?.error ?? "No run payload captured" })}
                     </pre>
+                  </div>
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <Card className="space-y-3 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                        Injected Payload Preview
+                      </div>
+                      {payloadChanged(task.payload, injectionPreview.payload) ? (
+                        <pre className="overflow-auto rounded-md bg-stone-950 p-4 text-xs text-stone-100">
+                          {asPrettyJson(injectionPreview.payload)}
+                        </pre>
+                      ) : (
+                        <div className="text-sm text-[color:var(--muted)]">
+                          No upstream injection changed the persisted payload.
+                        </div>
+                      )}
+                      {injectionPreview.applied.length > 0 ? (
+                        <div className="space-y-2">
+                          {injectionPreview.applied.map((entry) => (
+                            <div
+                              key={`${entry.fromTaskId}:${entry.outputMergeKey}`}
+                              className="rounded-md border border-[color:var(--border)] bg-white px-3 py-2 text-sm"
+                            >
+                              {entry.fromTaskId} {"->"} {entry.outputMergeKey} via {entry.runId}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {injectionPreview.missing.length > 0 ? (
+                        <div className="space-y-2">
+                          {injectionPreview.missing.map((entry) => (
+                            <div
+                              key={`${entry.fromTaskId}:${entry.reason}`}
+                              className="rounded-md border border-[color:var(--warning)]/25 bg-[color:var(--warning)]/10 px-3 py-2 text-sm"
+                            >
+                              {entry.fromTaskId}: {entry.reason}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </Card>
+                    <Card className="space-y-3 p-4">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                        Downstream Blocked Tasks
+                      </div>
+                      {blockedDependents.length === 0 ? (
+                        <div className="text-sm text-[color:var(--muted)]">
+                          No blocked or waiting downstream tasks were found.
+                        </div>
+                      ) : (
+                        blockedDependents.map((entry) => (
+                          <div
+                            key={`${entry.edge.fromTaskId}:${entry.edge.toTaskId}`}
+                            className="rounded-md border border-[color:var(--border)] bg-white px-3 py-3 text-sm"
+                          >
+                            <div className="font-semibold">{entry.task.title}</div>
+                            <div className="mt-1 text-xs text-[color:var(--muted)]">
+                              blocked at edge {entry.edge.fromTaskId} {"->"} {entry.edge.toTaskId}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </Card>
                   </div>
                 </Card>
               );
@@ -3052,6 +3773,7 @@ export function TaskDetailPage({
   taskId: string;
 }): JSX.Element {
   const queryClient = useQueryClient();
+  const { confirmAction, notifyError, notifySuccess } = useConsoleFeedback();
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
     queryFn: () => api.getTask(taskId),
@@ -3072,29 +3794,98 @@ export function TaskDetailPage({
     queryFn: () => api.listRuns({ taskId }),
     refetchInterval: 5_000,
   });
+  const workflowEdgesQuery = useQuery({
+    queryKey: ["workflow", taskQuery.data?.workflowId ?? null, "task-edges"],
+    queryFn: () => api.listWorkflowTaskEdges(taskQuery.data!.workflowId),
+    enabled: Boolean(taskQuery.data?.workflowId),
+    refetchInterval: 5_000,
+  });
+  const dependencyRunQueries = useQueries({
+    queries: (dependenciesQuery.data ?? []).map((edge) => ({
+      queryKey: ["runs", "task", edge.fromTaskId],
+      queryFn: () => api.listRuns({ taskId: edge.fromTaskId }),
+      refetchInterval: 5_000,
+    })),
+  });
   const dispatchMutation = useMutation({
     mutationFn: () => api.dispatchTask(taskId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["task", taskId] });
       await queryClient.invalidateQueries({ queryKey: ["runs", "task", taskId] });
+      notifySuccess("Task dispatched.", "Dispatched");
     },
-    onError: (error) => window.alert(normalizeError(error)),
+    onError: (error) => notifyError(error),
+  });
+  const resetMutation = useMutation({
+    mutationFn: (dispatch: boolean) => api.resetTask(taskId, dispatch ? { dispatch: true } : undefined),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      await queryClient.invalidateQueries({ queryKey: ["runs", "task", taskId] });
+      await queryClient.invalidateQueries({ queryKey: ["workflow", result.workflowId, "tasks"] });
+      notifySuccess(
+        result.dispatched
+          ? "Task reset to ready and re-dispatched."
+          : "Task reset to ready.",
+        result.dispatched ? "Recovered + Dispatched" : "Recovered",
+      );
+    },
+    onError: (error) => notifyError(error),
+  });
+  const cancelMutation = useMutation({
+    mutationFn: () => api.cancelTask(taskId),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["task", taskId] });
+      await queryClient.invalidateQueries({ queryKey: ["workflow", result.workflowId, "tasks"] });
+      notifySuccess("Task cancelled.", "Cancelled");
+    },
+    onError: (error) => notifyError(error),
   });
 
-  if (taskQuery.isLoading || dependenciesQuery.isLoading || dependentsQuery.isLoading || runsQuery.isLoading) {
+  if (
+    taskQuery.isLoading ||
+    dependenciesQuery.isLoading ||
+    dependentsQuery.isLoading ||
+    runsQuery.isLoading ||
+    workflowEdgesQuery.isLoading
+  ) {
     return <LoadingPanel />;
   }
 
-  if (taskQuery.error || dependenciesQuery.error || dependentsQuery.error || runsQuery.error || !taskQuery.data) {
+  if (
+    taskQuery.error ||
+    dependenciesQuery.error ||
+    dependentsQuery.error ||
+    runsQuery.error ||
+    workflowEdgesQuery.error ||
+    !taskQuery.data
+  ) {
     return (
       <ErrorState
-        message={normalizeError(taskQuery.error ?? dependenciesQuery.error ?? dependentsQuery.error ?? runsQuery.error ?? new Error("Task not found"))}
+        message={normalizeError(taskQuery.error ?? dependenciesQuery.error ?? dependentsQuery.error ?? runsQuery.error ?? workflowEdgesQuery.error ?? new Error("Task not found"))}
       />
     );
   }
 
   const task = taskQuery.data;
   const latestRun = sortByUpdatedAtDescending(runsQuery.data ?? [])[0];
+  const dependencySucceededRuns = new Map<string, Run | undefined>();
+  dependencyRunQueries.forEach((query, index) => {
+    const edge = dependenciesQuery.data?.[index];
+
+    if (!edge) {
+      return;
+    }
+
+    const summary = buildTaskRunSummaries(new Map([[edge.fromTaskId, query.data ?? []]])).get(edge.fromTaskId);
+    dependencySucceededRuns.set(edge.fromTaskId, summary?.latestSucceeded);
+  });
+  const injectionPreview = reconstructInjectedPayload(
+    task,
+    workflowEdgesQuery.data ?? [],
+    dependencySucceededRuns,
+  );
+  const canReset = task.status === "failed" || task.status === "cancelled";
+  const canCancel = ["pending", "ready", "blocked", "waiting", "queued"].includes(task.status);
 
   return (
     <div className="space-y-6">
@@ -3102,12 +3893,55 @@ export function TaskDetailPage({
         title={task.title}
         description="Single-task drilldown across payload, dependencies, runs, and runtime provenance."
         actions={
-          task.status === "ready" ? (
-            <Button onClick={() => dispatchMutation.mutate()}>
-              <Play className="h-4 w-4" />
-              Dispatch
-            </Button>
-          ) : null
+          <>
+            <Link to="/workflows/$workflowId" params={{ workflowId: task.workflowId }}>
+              <Button variant="secondary">Open Workflow</Button>
+            </Link>
+            {task.status === "ready" ? (
+              <Button onClick={() => dispatchMutation.mutate()}>
+                <Play className="h-4 w-4" />
+                Dispatch
+              </Button>
+            ) : null}
+            {canReset ? (
+              <>
+                <Button
+                  variant="secondary"
+                  disabled={resetMutation.isPending}
+                  onClick={() => resetMutation.mutate(false)}
+                >
+                  Reset to Ready
+                </Button>
+                <Button
+                  disabled={resetMutation.isPending}
+                  onClick={() => resetMutation.mutate(true)}
+                >
+                  Reset + Dispatch
+                </Button>
+              </>
+            ) : null}
+            {canCancel ? (
+              <Button
+                variant="danger"
+                disabled={cancelMutation.isPending}
+                onClick={async () => {
+                  const approved = await confirmAction({
+                    title: `Cancel task ${task.title}?`,
+                    description:
+                      "This moves the task to cancelled if it is not already running or terminal.",
+                    confirmLabel: "Cancel Task",
+                    confirmTone: "danger",
+                  });
+
+                  if (approved) {
+                    cancelMutation.mutate();
+                  }
+                }}
+              >
+                Cancel Task
+              </Button>
+            ) : null}
+          </>
         }
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
@@ -3173,7 +4007,54 @@ export function TaskDetailPage({
         </Card>
       </div>
       <Card className="space-y-4 p-6">
-        <SectionHeader title="Run History" description="Per-task run attempts. Full payload diff remains Phase 4." />
+        <SectionHeader
+          title="Injection Payload Preview"
+          description="Best-effort reconstruction of dispatch payload after upstream output injection."
+        />
+        <div className="grid gap-4 xl:grid-cols-2">
+          <pre className="overflow-auto rounded-md bg-stone-950 p-4 text-xs text-stone-100">
+            {asPrettyJson(task.payload)}
+          </pre>
+          <pre className="overflow-auto rounded-md bg-stone-950 p-4 text-xs text-stone-100">
+            {asPrettyJson(injectionPreview.payload)}
+          </pre>
+        </div>
+        {payloadChanged(task.payload, injectionPreview.payload) ? (
+          <div className="rounded-md border border-[color:var(--info)]/25 bg-[color:var(--info)]/8 p-4 text-sm">
+            Upstream injection changes the payload at dispatch time.
+          </div>
+        ) : (
+          <div className="rounded-md border border-[color:var(--border)] bg-slate-50 p-4 text-sm text-[color:var(--muted)]">
+            No upstream output injection changed this task payload.
+          </div>
+        )}
+        {injectionPreview.applied.length > 0 ? (
+          <div className="space-y-2">
+            {injectionPreview.applied.map((entry) => (
+              <div
+                key={`${entry.fromTaskId}:${entry.outputMergeKey}`}
+                className="rounded-md border border-[color:var(--border)] bg-white px-3 py-2 text-sm"
+              >
+                {entry.fromTaskId} injected into {entry.outputMergeKey} via {entry.runId}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {injectionPreview.missing.length > 0 ? (
+          <div className="space-y-2">
+            {injectionPreview.missing.map((entry) => (
+              <div
+                key={`${entry.fromTaskId}:${entry.reason}`}
+                className="rounded-md border border-[color:var(--warning)]/25 bg-[color:var(--warning)]/10 px-3 py-2 text-sm"
+              >
+                {entry.fromTaskId}: {entry.reason}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Card>
+      <Card className="space-y-4 p-6">
+        <SectionHeader title="Run History" description="Per-task run attempts with navigation into full run detail." />
         <div className="space-y-3">
           {(runsQuery.data ?? []).map((run) => (
             <Link
@@ -3210,21 +4091,29 @@ export function RunDetailPage({
 }: {
   runId: string;
 }): JSX.Element {
+  const { copyJson } = useConsoleFeedback();
   const runQuery = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.getRun(runId),
     refetchInterval: 5_000,
   });
+  const taskQuery = useQuery({
+    queryKey: ["run", runId, "task"],
+    queryFn: () => api.getTask(runQuery.data!.taskId),
+    enabled: Boolean(runQuery.data?.taskId),
+    refetchInterval: 5_000,
+  });
 
-  if (runQuery.isLoading) {
+  if (runQuery.isLoading || taskQuery.isLoading) {
     return <LoadingPanel />;
   }
 
-  if (runQuery.error || !runQuery.data) {
-    return <ErrorState message={normalizeError(runQuery.error ?? new Error("Run not found"))} />;
+  if (runQuery.error || taskQuery.error || !runQuery.data) {
+    return <ErrorState message={normalizeError(runQuery.error ?? taskQuery.error ?? new Error("Run not found"))} />;
   }
 
   const run = runQuery.data;
+  const task = taskQuery.data;
 
   return (
     <div className="space-y-6">
@@ -3232,10 +4121,24 @@ export function RunDetailPage({
         title={`Run ${run.runId}`}
         description="Detailed execution attempt payload, timestamps, output, and error body."
         actions={
-          <Button variant="secondary" onClick={() => copyJson(run)}>
-            <Copy className="h-4 w-4" />
-            Copy JSON
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                void copyJson(run, "Run Copied");
+              }}
+            >
+              <Copy className="h-4 w-4" />
+              Copy JSON
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => exportJson(`${run.runId}.json`, run)}
+            >
+              <Download className="h-4 w-4" />
+              Export JSON
+            </Button>
+          </>
         }
       />
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
@@ -3272,6 +4175,14 @@ export function RunDetailPage({
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </Link>
+            {task ? (
+              <Link to="/workflows/$workflowId" params={{ workflowId: task.workflowId }}>
+                <Button variant="secondary" className="w-full justify-between">
+                  Open Workflow
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+            ) : null}
           </div>
         </Card>
       </div>

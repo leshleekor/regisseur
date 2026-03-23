@@ -1,28 +1,35 @@
 # regisseur (r7r)
 
 Regisseur is a lightweight AI agent orchestrator for task- and workflow-driven
-automation. It combines workflow definitions, task graphs, schedules,
-queue-backed execution, transport adapters, and run tracking in a single
-TypeScript monorepo.
+automation. It combines reusable workflow definitions, runtime task graphs,
+schedules, queue-backed execution, transport adapters, run tracking, and an
+operator-facing web console in a single TypeScript monorepo.
 
 This repository uses a `pnpm` workspace. Shared libraries live in `packages/`,
-while runnable applications and examples live in `apps/`.
+while runnable applications live in `apps/`.
 
 ## Overview
 
-Regisseur models agent execution as a graph of reusable definitions and
-materialized runtime objects:
+Regisseur models orchestration as two related layers:
 
-- agents describe the execution backends available to the system
-- workflow definitions and task templates describe reusable automation graphs
-- workflows and tasks represent concrete runtime executions
-- schedules trigger workflow definition runs over time
-- runs capture execution attempts, state transitions, and outputs
-- adapters translate orchestration tasks into real external requests
+- definition layer
+  - `WorkflowDefinition`
+  - `TaskTemplate`
+  - `TaskTemplateEdge`
+  - `LoopDefinition`
+- runtime layer
+  - `Workflow`
+  - `Task`
+  - `TaskEdge`
+  - `Run`
 
-The current implementation is centered on a Fastify server, PostgreSQL-backed
-repositories, Redis/BullMQ workers, and adapter packages for multiple transport
-styles.
+The current implementation includes:
+
+- a Fastify API server
+- PostgreSQL-backed repositories and migrations
+- Redis/BullMQ-backed queues and workers
+- HTTP, CLI, and OpenClaw adapter packages
+- a React/Vite operations console for authoring and monitoring
 
 ## Architecture
 
@@ -34,14 +41,17 @@ At a high level, the workspace is split into a few layers:
 3. `@regisseur/scheduler`, `@regisseur/dispatcher`, and
    `@regisseur/queue-bullmq` coordinate scheduled and queue-backed execution.
 4. Adapter packages translate tasks into transport-specific execution requests.
-5. `@regisseur/server` composes the stack into an HTTP API, restores persisted
-   schedules on boot, and starts the runtime services.
+5. `@regisseur/server` composes the runtime into an HTTP API and worker-based
+   orchestrator app.
+6. `@regisseur/web` provides a browser-based console for authoring definitions
+   and observing runtime execution.
 
 ## Workspace Layout
 
 | Path                        | Package                         | Purpose                                                       |
 | --------------------------- | ------------------------------- | ------------------------------------------------------------- |
 | `apps/server`               | `@regisseur/server`             | Fastify API server and runtime composition layer              |
+| `apps/web`                  | `@regisseur/web`                | React/Vite operations console                                 |
 | `apps/example-basic`        | `@regisseur/example-basic`      | Minimal example package scaffold                              |
 | `apps/example-http-agent`   | `@regisseur/example-http-agent` | Minimal example scaffold for HTTP-based agent flows           |
 | `packages/core`             | `@regisseur/core`               | Core orchestration domain types and graph logic               |
@@ -62,16 +72,17 @@ At a high level, the workspace is split into a few layers:
 - PostgreSQL
 - Redis
 
-## Getting Started
+If `pnpm` is not installed globally, use `corepack pnpm ...`.
 
-Install dependencies and build the workspace:
+## Quick Start
+
+Install dependencies:
 
 ```bash
-pnpm install
-pnpm build
+corepack pnpm install
 ```
 
-Provide the server environment variables:
+Set the server environment variables:
 
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/regisseur"
@@ -80,18 +91,60 @@ export AUTO_MIGRATE=true
 export ENABLE_CLI_ADAPTER=true
 ```
 
-Start the server:
+Start the API server:
 
 ```bash
-pnpm --filter @regisseur/server start
+corepack pnpm --filter @regisseur/server build
+corepack pnpm --filter @regisseur/server start
 ```
 
-By default, the server listens on `0.0.0.0:3000`.
+In a second terminal, start the web console:
 
-For a fresh local database, setting `AUTO_MIGRATE=true` is the easiest way to
-apply the bundled PostgreSQL migrations at startup.
+```bash
+corepack pnpm --filter @regisseur/web dev
+```
+
+Default local ports:
+
+- server: `http://localhost:3000`
+- web: `http://localhost:5173`
+
+## Web Console And API Proxy
+
+`apps/web` uses Vite and talks to the server through `/api` by default.
+
+Local development behavior:
+
+- browser requests go to `/api/...`
+- Vite proxies `/api` to `http://localhost:3000` by default
+- this avoids needing cross-origin browser access during normal local
+  development
+
+Relevant web environment variables:
+
+- `VITE_PROXY_TARGET`
+  - optional
+  - defaults to `http://localhost:3000`
+  - controls where the Vite dev server proxies `/api`
+- `VITE_API_BASE_URL`
+  - optional
+  - defaults to `/api`
+  - controls the browser-visible base URL used by the API client
+
+Examples:
+
+```bash
+# Default local proxy setup
+export VITE_PROXY_TARGET="http://localhost:3000"
+export VITE_API_BASE_URL="/api"
+
+# Direct API base URL (use only when your deployment handles same-origin or CORS)
+export VITE_API_BASE_URL="http://localhost:3000"
+```
 
 ## Environment Variables
+
+Server environment variables:
 
 | Variable                  | Required | Default   | Description                                               |
 | ------------------------- | -------- | --------- | --------------------------------------------------------- |
@@ -105,23 +158,69 @@ apply the bundled PostgreSQL migrations at startup.
 | `ENABLE_CLI_ADAPTER`      | No       | `false`   | Enable the CLI execution adapter                          |
 | `ENABLE_OPENCLAW_ADAPTER` | No       | `false`   | Enable the OpenClaw execution adapter                     |
 
+Web environment variables:
+
+| Variable            | Required | Default                 | Description                                     |
+| ------------------- | -------- | ----------------------- | ----------------------------------------------- |
+| `VITE_PROXY_TARGET` | No       | `http://localhost:3000` | Vite dev proxy target for `/api`                |
+| `VITE_API_BASE_URL` | No       | `/api`                  | Browser-visible API base URL used by the client |
+
 The server fails fast when required values are missing or malformed.
+
+## Development Workflow
+
+Typical local workflow:
+
+1. Start PostgreSQL and Redis.
+2. Start `@regisseur/server`.
+3. Start `@regisseur/web`.
+4. Use the web console to create agents, definitions, schedules, and runtime
+   runs.
+5. Use runtime detail pages or API endpoints to inspect failures and recover
+   work.
+
+The current web console covers:
+
+- dashboard and runtime monitoring
+- workflow definition authoring
+- task template, edge, loop, and schedule management
+- agent management
+- runtime workflow, task, and run inspection
 
 ## Available Scripts
 
 Root workspace scripts:
 
-- `pnpm build` - build every workspace package
-- `pnpm test` - run the root Vitest suite
-- `pnpm lint` - run ESLint across the repository
-- `pnpm format` - check formatting with Prettier
-- `pnpm format:write` - rewrite supported files with Prettier
+- `pnpm build`
+  - builds every workspace package and app
+- `pnpm test`
+  - runs the root Vitest suite for `packages/**/*.test.ts` plus
+    `apps/**/*.test.ts?(x)`
+- `pnpm test:server`
+  - runs the `@regisseur/server` test suite directly
+- `pnpm test:web`
+  - runs the `@regisseur/web` test command
+- `pnpm lint`
+  - runs ESLint across the repository
+- `pnpm format`
+  - checks formatting with Prettier
+- `pnpm format:write`
+  - rewrites supported files with Prettier
 
 Useful package-scoped commands:
 
 - `pnpm --filter @regisseur/server build`
 - `pnpm --filter @regisseur/server start`
 - `pnpm --filter @regisseur/server test`
+- `pnpm --filter @regisseur/web dev`
+- `pnpm --filter @regisseur/web build`
+- `pnpm --filter @regisseur/web test`
+
+Note:
+
+- `apps/web` is now wired for Vitest, but there are currently no checked-in web
+  test files. The root test workflow will pick them up automatically once they
+  are added under `apps/web/src/**/*.test.ts?(x)`.
 
 ## HTTP API Surface
 
@@ -140,26 +239,37 @@ including:
 - schedules
 - runs
 
-Notable execution-oriented routes include:
+Notable execution and operator endpoints:
 
 - `POST /workflow-definitions/:workflowDefinitionId/start`
 - `POST /tasks/:taskId/dispatch`
+- `POST /tasks/:taskId/reset`
+- `POST /tasks/:taskId/cancel`
+- `POST /workflows/:workflowId/cancel`
+- `POST /workflows/:workflowId/purge`
 
 Route implementations live under `apps/server/src/routes`.
 
 ## Development Notes
 
 - The workspace uses strict TypeScript settings with ESM (`module: NodeNext`).
-- Tests are written with Vitest across apps and packages, including repository
-  integration coverage in `packages/store-postgres`.
-- PostgreSQL migrations currently live in
+- Tests are written with Vitest across packages and apps, including repository
+  integration coverage in `packages/store-postgres` and HTTP/runtime coverage in
+  `apps/server`.
+- PostgreSQL migrations live in
   `packages/store-postgres/src/schema/migrations`.
-- Queue-backed execution currently assumes Redis via BullMQ.
+- Queue-backed execution assumes Redis via BullMQ.
+- The checked-in local browser workflow assumes the Vite proxy in `apps/web`.
 
 ## Status
 
-Regisseur is already more than a blank scaffold: the repository contains the
-server API, orchestration packages, persistence layer, scheduler, queue
-integration, adapters, and test coverage. It is still an early-stage project,
-though, so package boundaries, APIs, examples, and operational tooling should
-be expected to evolve.
+Regisseur is no longer just a scaffold. The repository currently contains:
+
+- a tested server API and execution lifecycle
+- persistence, queue, scheduler, and adapter packages
+- reusable workflow-definition authoring and runtime materialization
+- loop expansion, dynamic task expansion, and upstream output injection
+- a working web console for authoring and runtime inspection
+
+It is still an early-stage project, so package boundaries, APIs, examples, and
+operational hardening should be expected to evolve.
