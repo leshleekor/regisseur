@@ -1,4 +1,4 @@
-import type { LoopDefinition, Task, TaskEdge, TaskTemplate, TaskTemplateEdge } from "@regisseur/core";
+import type { LoopDefinition, Run, Task, TaskEdge, TaskTemplate, TaskTemplateEdge } from "@regisseur/core";
 import { Background, Controls, MiniMap, ReactFlow, type NodeProps } from "reactflow";
 import type { JSX } from "react";
 import "reactflow/dist/style.css";
@@ -28,8 +28,19 @@ function FlowNode({ data }: NodeProps<FlowNodeData>): JSX.Element {
   );
 }
 
+function FlowLaneNode({ data }: NodeProps<FlowNodeData>): JSX.Element {
+  return (
+    <div className="h-full rounded-[18px] border border-dashed border-[color:var(--border)] bg-white/30 p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+        {data.title}
+      </div>
+    </div>
+  );
+}
+
 const nodeTypes = {
   card: FlowNode,
+  lane: FlowLaneNode,
 };
 
 export function DefinitionGraph({
@@ -56,7 +67,10 @@ export function DefinitionGraph({
     <div className="h-[560px] overflow-hidden rounded-md border border-[color:var(--border)] bg-white">
       <ReactFlow
         fitView
-        nodes={graph.nodes.map((node) => ({ ...node, type: "card" }))}
+        nodes={graph.nodes.map((node) => ({
+          ...node,
+          type: node.type === "lane" ? "lane" : "card",
+        }))}
         edges={graph.edges}
         nodeTypes={nodeTypes}
         proOptions={{ hideAttribution: true }}
@@ -73,10 +87,12 @@ export function RuntimeGraph({
   tasks,
   edges,
   loop,
+  latestRunsByTaskId,
 }: {
   tasks: readonly Task[];
   edges: readonly TaskEdge[];
   loop?: LoopDefinition | null;
+  latestRunsByTaskId?: ReadonlyMap<string, Run | undefined>;
 }): JSX.Element {
   if (tasks.length === 0) {
     return (
@@ -87,13 +103,19 @@ export function RuntimeGraph({
     );
   }
 
-  const graph = buildRuntimeFlow(tasks, edges, loop);
+  const graph = buildRuntimeFlow(tasks, edges, {
+    loop,
+    latestRunsByTaskId,
+  });
 
   return (
     <div className="h-[560px] overflow-hidden rounded-md border border-[color:var(--border)] bg-white">
       <ReactFlow
         fitView
-        nodes={graph.nodes.map((node) => ({ ...node, type: "card" }))}
+        nodes={graph.nodes.map((node) => ({
+          ...node,
+          type: node.type === "lane" ? "lane" : "card",
+        }))}
         edges={graph.edges}
         nodeTypes={nodeTypes}
         proOptions={{ hideAttribution: true }}

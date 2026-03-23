@@ -1,7 +1,18 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Network, Orbit, PlaySquare, Repeat2, Workflow } from "lucide-react";
+import {
+  ChevronRight,
+  LayoutDashboard,
+  Network,
+  Orbit,
+  PlaySquare,
+  Plus,
+  Repeat2,
+  Workflow,
+} from "lucide-react";
 import type { JSX } from "react";
 
+import { Button } from "@/components/ui/primitives";
+import { buildBreadcrumbs } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -36,6 +47,8 @@ export function AppShell(): JSX.Element {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const breadcrumbs = buildBreadcrumbs(pathname);
+  const currentLabel = breadcrumbs[breadcrumbs.length - 1]?.label ?? "Control Surface";
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] px-4 py-4 md:px-6">
@@ -89,11 +102,49 @@ export function AppShell(): JSX.Element {
 
         <main className="overflow-hidden rounded-md border border-[color:var(--border)] bg-white shadow-panel">
           <div className="border-b border-[color:var(--border)] px-6 py-4">
-            <div className="font-sans text-3xl font-bold tracking-tight">
-              {pathname === "/dashboard" ? "System Pulse" : "Control Surface"}
-            </div>
-            <div className="mt-1 text-sm text-[color:var(--muted)]">
-              Workflow authoring, monitoring, and operator controls in one place.
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                  {breadcrumbs.map((breadcrumb, index) => (
+                    <div key={`${breadcrumb.label}-${index}`} className="flex items-center gap-2">
+                      {breadcrumb.to ? (
+                        <Link to={breadcrumb.to} className="transition hover:text-[color:var(--foreground)]">
+                          {breadcrumb.label}
+                        </Link>
+                      ) : (
+                        <span className="text-[color:var(--foreground)]">{breadcrumb.label}</span>
+                      )}
+                      {index < breadcrumbs.length - 1 ? <ChevronRight className="h-3.5 w-3.5" /> : null}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 font-sans text-3xl font-bold tracking-tight">
+                  {pathname === "/dashboard" ? "System Pulse" : currentLabel}
+                </div>
+                <div className="mt-1 text-sm text-[color:var(--muted)]">
+                  Workflow authoring, monitoring, and operator controls in one place.
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button asChild variant="secondary">
+                  <Link to="/workflow-definitions/new">
+                    <Plus className="h-4 w-4" />
+                    New Definition
+                  </Link>
+                </Button>
+                <Button asChild variant="secondary">
+                  <Link to="/schedules/new">
+                    <Plus className="h-4 w-4" />
+                    New Schedule
+                  </Link>
+                </Button>
+                <Button asChild variant="secondary">
+                  <Link to="/agents/new">
+                    <Plus className="h-4 w-4" />
+                    New Agent
+                  </Link>
+                </Button>
+              </div>
             </div>
           </div>
           <div className="space-y-8 px-6 py-6">
