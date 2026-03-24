@@ -153,7 +153,9 @@ function exportJson(filename: string, value: unknown): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  document.body.appendChild(anchor);
   anchor.click();
+  anchor.remove();
   URL.revokeObjectURL(url);
 }
 
@@ -254,6 +256,23 @@ function buildDefinitionBundleFromQueries(input: {
 
 function findingTone(finding: PreflightFinding): "warning" | "danger" {
   return finding.severity === "error" ? "danger" : "warning";
+}
+
+function isTerminalWorkflowStatus(status?: Workflow["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+function isTerminalTaskStatus(status?: Task["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+function isTerminalRunStatus(status?: Run["status"]): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "timeout" ||
+    status === "cancelled"
+  );
 }
 
 function LoadingPanel(): JSX.Element {
@@ -1671,12 +1690,34 @@ export function DefinitionTasksPage({
                   Export
                 </Button>
                 <Button
-                  onClick={() =>
-                    saveMutation.mutate({
-                      ...draft,
-                      updatedAt: createTimestamp(),
-                    })
-                  }
+                  onClick={async () => {
+                    try {
+                      if (selectedTaskTemplate?.updatedAt) {
+                        const latest = await api.getTaskTemplate(draft.taskTemplateId);
+
+                        if (latest.updatedAt !== selectedTaskTemplate.updatedAt) {
+                          const proceed = await confirmAction({
+                            title: "Overwrite newer task template state?",
+                            description:
+                              "The task template changed on the server. Confirm if you want to overwrite it with your local draft.",
+                            confirmLabel: "Overwrite",
+                            confirmTone: "warning",
+                          });
+
+                          if (!proceed) {
+                            return;
+                          }
+                        }
+                      }
+
+                      saveMutation.mutate({
+                        ...draft,
+                        updatedAt: createTimestamp(),
+                      });
+                    } catch (error) {
+                      notifyError(error);
+                    }
+                  }}
                 >
                   <Save className="h-4 w-4" />
                   Save
@@ -2300,7 +2341,7 @@ function LoopMultiSelect({
             className="inline-flex items-center gap-2 rounded-md bg-slate-100 px-3 py-1.5 text-sm"
             onClick={() => onChange(value.filter((candidate) => candidate !== entry))}
           >
-            {entry}
+            {options.find((taskTemplate) => taskTemplate.taskTemplateId === entry)?.title ?? entry}
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         ))}
@@ -2595,6 +2636,7 @@ export function DefinitionRunsPage({
 }: {
   workflowDefinitionId: string;
 }): JSX.Element {
+  const [statusFilter, setStatusFilter] = useState<Workflow["status"] | "">("");
   const workflowsQuery = useQuery({
     queryKey: ["workflows"],
     queryFn: () => api.listWorkflows(),
@@ -2610,7 +2652,9 @@ export function DefinitionRunsPage({
 
   const rows = sortByUpdatedAtDescending(
     (workflowsQuery.data ?? []).filter(
-      (workflow) => workflow.workflowDefinitionId === workflowDefinitionId,
+      (workflow) =>
+        workflow.workflowDefinitionId === workflowDefinitionId &&
+        (statusFilter ? workflow.status === statusFilter : true),
     ),
   );
 
@@ -2620,10 +2664,28 @@ export function DefinitionRunsPage({
         title="Run History"
         description="Client-side filtered runtime workflows started from this definition."
       />
+      <Card className="p-4">
+        <div className="w-full max-w-xs space-y-2">
+          <Label>Status Filter</Label>
+          <Select
+            value={statusFilter}
+            onChange={(event) =>
+              setStatusFilter(event.target.value as Workflow["status"] | "")
+            }
+          >
+            <option value="">All</option>
+            <option value="pending">pending</option>
+            <option value="running">running</option>
+            <option value="succeeded">succeeded</option>
+            <option value="failed">failed</option>
+            <option value="cancelled">cancelled</option>
+          </Select>
+        </div>
+      </Card>
       {rows.length === 0 ? (
         <EmptyState
           title="No runtime history"
-          description="Start the definition to materialize runtime workflows and task graphs."
+          description="Start the definition or widen the current status filter."
         />
       ) : (
         <div className="space-y-3">
@@ -2982,6 +3044,13 @@ function AgentConfigForm({
             value={stringValue(currentConfig.url)}
             onChange={(url) => onChange({ ...currentConfig, url })}
           />
+          <KeyValueEditor
+            label="headers"
+            value={stringRecordValue(currentConfig.headers)}
+            onChange={(headers) => onChange({ ...currentConfig, headers })}
+            keyPlaceholder="header"
+            valuePlaceholder="value"
+          />
           <FormField
             label="authToken"
             value={stringValue(currentConfig.authToken)}
@@ -2998,6 +3067,21 @@ function AgentConfigForm({
               })
             }
           />
+          <div className="space-y-2">
+            <Label>includeAgentName</Label>
+            <Select
+              value={booleanValue(currentConfig.includeAgentName) ? "true" : "false"}
+              onChange={(event) =>
+                onChange({
+                  ...currentConfig,
+                  includeAgentName: event.target.value === "true",
+                })
+              }
+            >
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </Select>
+          </div>
         </>
       ) : (
         <>
@@ -3017,6 +3101,18 @@ function AgentConfigForm({
             onChange={(workingDirectory) =>
               onChange({ ...currentConfig, workingDirectory })
             }
+          />
+          <StringListEditor
+            label="args"
+            value={stringArrayValue(currentConfig.args)}
+            onChange={(args) => onChange({ ...currentConfig, args })}
+          />
+          <KeyValueEditor
+            label="env"
+            value={stringRecordValue(currentConfig.env)}
+            onChange={(env) => onChange({ ...currentConfig, env })}
+            keyPlaceholder="ENV_NAME"
+            valuePlaceholder="value"
           />
         </>
       )}
@@ -3051,8 +3147,64 @@ function numberValue(value: unknown, fallback = 0): number {
   return typeof value === "number" && !Number.isNaN(value) ? value : fallback;
 }
 
+function booleanValue(value: unknown): boolean {
+  return value === true;
+}
+
+function stringRecordValue(value: unknown): Record<string, string> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function StringListEditor({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string[];
+  onChange: (nextValue: string[]) => void;
+}): JSX.Element {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <Textarea
+        className="min-h-28"
+        value={value.join("\n")}
+        onChange={(event) =>
+          onChange(
+            event.target.value
+              .split("\n")
+              .map((entry) => entry.trim())
+              .filter(Boolean),
+          )
+        }
+      />
+      <div className="text-xs text-[color:var(--muted)]">
+        One entry per line.
+      </div>
+    </div>
+  );
+}
+
 export function SchedulesPage(): JSX.Element {
   const [filter, setFilter] = useState<"" | "workflow" | "task">("");
+  const [enabledFilter, setEnabledFilter] = useState<"" | "enabled" | "disabled">("");
   const schedulesQuery = useQuery({
     queryKey: ["schedules"],
     queryFn: () => api.listSchedules(),
@@ -3066,8 +3218,14 @@ export function SchedulesPage(): JSX.Element {
     return <ErrorState message={normalizeError(schedulesQuery.error)} />;
   }
 
-  const rows = sortByUpdatedAtDescending(schedulesQuery.data ?? []).filter((schedule) =>
-    filter ? schedule.targetType === filter : true,
+  const rows = sortByUpdatedAtDescending(schedulesQuery.data ?? []).filter(
+    (schedule) =>
+      (filter ? schedule.targetType === filter : true) &&
+      (enabledFilter === ""
+        ? true
+        : enabledFilter === "enabled"
+          ? schedule.enabled
+          : !schedule.enabled),
   );
 
   return (
@@ -3085,13 +3243,26 @@ export function SchedulesPage(): JSX.Element {
         }
       />
       <Card className="p-4">
-        <div className="w-full max-w-xs space-y-2">
-          <Label>Target Filter</Label>
-          <Select value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
-            <option value="">All</option>
-            <option value="workflow">workflow</option>
-            <option value="task">task</option>
-          </Select>
+        <div className="flex flex-col gap-4 md:flex-row">
+          <div className="w-full max-w-xs space-y-2">
+            <Label>Target Filter</Label>
+            <Select value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
+              <option value="">All</option>
+              <option value="workflow">workflow</option>
+              <option value="task">task</option>
+            </Select>
+          </div>
+          <div className="w-full max-w-xs space-y-2">
+            <Label>Enabled Filter</Label>
+            <Select
+              value={enabledFilter}
+              onChange={(event) => setEnabledFilter(event.target.value as typeof enabledFilter)}
+            >
+              <option value="">All</option>
+              <option value="enabled">Enabled</option>
+              <option value="disabled">Disabled</option>
+            </Select>
+          </div>
         </div>
       </Card>
       <div className="space-y-3">
@@ -3241,29 +3412,35 @@ export function ScheduleEditorPage({
           }
         />
         <ScheduleForm draft={draft} setDraft={setDraft} />
-        <div className="space-y-2">
-          <Label>Definition Picker</Label>
-          <Select
-            value={draft.targetId}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                targetType: "workflow",
-                targetId: event.target.value,
-              })
-            }
-          >
-            <option value="">Choose workflow definition target</option>
-            {(definitionsQuery.data ?? []).map((definition) => (
-              <option
-                key={definition.workflowDefinitionId}
-                value={definition.workflowDefinitionId}
-              >
-                {definition.name}
-              </option>
-            ))}
-          </Select>
-        </div>
+        {draft.targetType === "workflow" ? (
+          <div className="space-y-2">
+            <Label>Definition Picker</Label>
+            <Select
+              value={draft.targetId}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  targetType: "workflow",
+                  targetId: event.target.value,
+                })
+              }
+            >
+              <option value="">Choose workflow definition target</option>
+              {(definitionsQuery.data ?? []).map((definition) => (
+                <option
+                  key={definition.workflowDefinitionId}
+                  value={definition.workflowDefinitionId}
+                >
+                  {definition.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : (
+          <div className="rounded-md border border-[color:var(--border)] bg-slate-50 p-4 text-sm text-[color:var(--muted)]">
+            Task target schedules use the targetType/targetId fields above. Definition picker is hidden until targetType is set back to workflow.
+          </div>
+        )}
       </Card>
 
       <Card className="space-y-4 p-6">
@@ -3351,7 +3528,10 @@ export function WorkflowsPage(): JSX.Element {
               <div>
                 <div className="font-semibold">{workflow.name}</div>
                 <div className="mt-1 text-xs text-[color:var(--muted)]">
-                  {workflow.workflowDefinitionId ?? "no definition"} · {workflow.triggerSource ?? "manual"} · {formatDateTime(workflow.updatedAt)}
+                  {workflow.workflowDefinitionId ?? "no definition"} · {workflow.triggerSource ?? "manual"}
+                  {workflow.triggeredByScheduleId ? ` · schedule ${workflow.triggeredByScheduleId}` : ""}
+                  {" · "}
+                  {formatDateTime(workflow.updatedAt)}
                 </div>
               </div>
               <Badge tone={statusTone(workflow.status)}>{workflow.status}</Badge>
@@ -3380,30 +3560,33 @@ export function WorkflowDetailPage({
   const workflowQuery = useQuery({
     queryKey: ["workflow", workflowId],
     queryFn: () => api.getWorkflow(workflowId),
-    refetchInterval: 7_500,
+    refetchInterval: (query) =>
+      isTerminalWorkflowStatus(query.state.data?.status as Workflow["status"] | undefined)
+        ? false
+        : 7_500,
   });
   const tasksQuery = useQuery({
     queryKey: ["workflow", workflowId, "tasks"],
     queryFn: () => api.listWorkflowTasks(workflowId),
-    refetchInterval: 7_500,
+    refetchInterval: isTerminalWorkflowStatus(workflowQuery.data?.status) ? false : 7_500,
   });
   const edgesQuery = useQuery({
     queryKey: ["workflow", workflowId, "task-edges"],
     queryFn: () => api.listWorkflowTaskEdges(workflowId),
-    refetchInterval: 7_500,
+    refetchInterval: isTerminalWorkflowStatus(workflowQuery.data?.status) ? false : 7_500,
   });
   const loopsQuery = useQuery({
     queryKey: ["workflow-definition", workflowQuery.data?.workflowDefinitionId ?? null, "loops"],
     queryFn: () => api.listLoops(workflowQuery.data!.workflowDefinitionId!),
     enabled: Boolean(workflowQuery.data?.workflowDefinitionId),
-    refetchInterval: 7_500,
+    refetchInterval: isTerminalWorkflowStatus(workflowQuery.data?.status) ? false : 7_500,
   });
 
   const runQueries = useQueries({
     queries: (tasksQuery.data ?? []).map((task) => ({
       queryKey: ["runs", "task", task.taskId],
       queryFn: () => api.listRuns({ taskId: task.taskId }),
-      refetchInterval: 10_000,
+      refetchInterval: isTerminalTaskStatus(task.status) ? false : 10_000,
     })),
   });
   const cancelWorkflowMutation = useMutation({
@@ -3777,7 +3960,10 @@ export function TaskDetailPage({
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
     queryFn: () => api.getTask(taskId),
-    refetchInterval: 5_000,
+    refetchInterval: (query) =>
+      isTerminalTaskStatus(query.state.data?.status as Task["status"] | undefined)
+        ? false
+        : 5_000,
   });
   const dependenciesQuery = useQuery({
     queryKey: ["task", taskId, "dependencies"],
@@ -3792,19 +3978,19 @@ export function TaskDetailPage({
   const runsQuery = useQuery({
     queryKey: ["runs", "task", taskId],
     queryFn: () => api.listRuns({ taskId }),
-    refetchInterval: 5_000,
+    refetchInterval: isTerminalTaskStatus(taskQuery.data?.status) ? false : 5_000,
   });
   const workflowEdgesQuery = useQuery({
     queryKey: ["workflow", taskQuery.data?.workflowId ?? null, "task-edges"],
     queryFn: () => api.listWorkflowTaskEdges(taskQuery.data!.workflowId),
     enabled: Boolean(taskQuery.data?.workflowId),
-    refetchInterval: 5_000,
+    refetchInterval: isTerminalTaskStatus(taskQuery.data?.status) ? false : 5_000,
   });
   const dependencyRunQueries = useQueries({
     queries: (dependenciesQuery.data ?? []).map((edge) => ({
       queryKey: ["runs", "task", edge.fromTaskId],
       queryFn: () => api.listRuns({ taskId: edge.fromTaskId }),
-      refetchInterval: 5_000,
+      refetchInterval: isTerminalTaskStatus(taskQuery.data?.status) ? false : 5_000,
     })),
   });
   const dispatchMutation = useMutation({
@@ -4095,13 +4281,16 @@ export function RunDetailPage({
   const runQuery = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.getRun(runId),
-    refetchInterval: 5_000,
+    refetchInterval: (query) =>
+      isTerminalRunStatus(query.state.data?.status as Run["status"] | undefined)
+        ? false
+        : 5_000,
   });
   const taskQuery = useQuery({
     queryKey: ["run", runId, "task"],
     queryFn: () => api.getTask(runQuery.data!.taskId),
     enabled: Boolean(runQuery.data?.taskId),
-    refetchInterval: 5_000,
+    refetchInterval: isTerminalRunStatus(runQuery.data?.status) ? false : 5_000,
   });
 
   if (runQuery.isLoading || taskQuery.isLoading) {
